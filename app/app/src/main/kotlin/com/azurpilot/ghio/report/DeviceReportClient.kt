@@ -119,6 +119,8 @@ class DeviceReportClient(private val context: Context) {
      * Sends only snapshots with an explicitly selected tested result, without automatic write retries.
      */
     suspend fun submit(report: DeviceReport): DeviceReportResult = withContext(Dispatchers.IO) {
+        // 闸门必须先于 credentials 求值：关闸时连证书资产都不读，确保没有任何出网准备动作。
+        if (!ReportGate.DEVICE_REPORT_ENABLED) throw DeviceReportException(R.string.device_report_disabled)
         if (report.compatibility !in setOf("working", "not_working")) {
             throw DeviceReportException(R.string.device_report_test_required)
         }

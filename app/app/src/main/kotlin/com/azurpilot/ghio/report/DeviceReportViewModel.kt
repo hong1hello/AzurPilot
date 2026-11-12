@@ -79,6 +79,11 @@ class DeviceReportViewModel(
     fun submit() {
         val report = state.value.report ?: return
         if (state.value.sending || state.value.result != null) return
+        // 闸门关着时立刻给本地文案，不进入 sending 态，避免界面显示「正在提交」再失败。
+        if (!ReportGate.DEVICE_REPORT_ENABLED) {
+            state.update { it.copy(errorRes = R.string.device_report_disabled) }
+            return
+        }
         if (report.compatibility !in setOf("working", "not_working")) {
             state.update { it.copy(errorRes = R.string.device_report_test_required) }
             return

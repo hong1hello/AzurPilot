@@ -670,6 +670,7 @@
     <string name="device_report_duplicate">This report has already been submitted. You can view the existing record.</string>
     <string name="device_report_open_issue">View submission</string>
     <string name="device_report_unavailable">This build has no valid submission certificate. Update the app and try again.</string>
+    <string name="device_report_disabled">Device reporting is disabled in this build. Nothing is sent to any server.</string>
     <string name="device_report_auth_error">Submission verification failed. Check the device clock or update the app and retry.</string>
     <string name="device_report_rate_limited">Too many submissions. Try again in an hour.</string>
     <string name="device_report_server_error">The server is temporarily busy. Retry later; duplicate submissions reuse the existing issue.</string>
