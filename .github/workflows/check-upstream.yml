@@ -16,6 +16,11 @@ concurrency:
 
 jobs:
   check:
+    # 只在官方仓库跑：fork 上没有 azurpilot-android-latest 发布记录，会让本工作流每半小时
+    # 都判定"需要构建"并反复派发整包构建；个人 fork 也不需要追上游。
+    # Official repository only: a fork has no azurpilot-android-latest release, so this job
+    # would consider every run "needs build" and re-dispatch a full build twice an hour.
+    if: ${{ github.repository == 'wess09/AzurPilot-for-Android' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
