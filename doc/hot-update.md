@@ -11,13 +11,15 @@ overlay 和依赖环境仍通过整包 Runtime 更新，见
 
 1. App 经 `/android/update/status` 检查构建清单记录的仓库和分支，默认 `dev`。
    自动热更只在调度器和工具空闲时应用，手动更新会恢复原有实例。
-2. 更新服务在 `/opt/azurpilot-update/source` 中浅拉**确切目标提交**。Git 下载
-   官方源码优先从 [CNB](https://cnb.cool/AzurPilot/AzurPilot) 获取，失败时回退到
-   构建来源（GitHub 回退源使用 App 选择的镜像前缀）。切源仍取同一提交，不依赖
-   Release 是否已发布相应前端；自定义构建仓库保持原样。
-3. 比较候选与当前 `uv.lock`。锁文件不同则保持当前源码和任务，返回
-   `requiresRuntimeUpdate=true`，交给每日整包更新或设置页的整包更新入口。
-   安装依赖仍关闭，避免未经构建及 OCR 验证的环境进入正式版本。
+2. 更新服务在 `/opt/azurpilot-update/source` 中浅拉**确切目标提交**。源码地址
+   **只取构建清单的 `azurpilot_update_repo`**：官方源的 CNB 优先、GitHub 镜像
+   前缀与构建来源回退均已屏蔽，单一地址取不到即失败回滚，不会改从其它地址重试。
+   清单缺少该字段时按「更新源未配置」处理：状态接口返回该错误、应用更新失败。
+3. 源码地址可由 App 设置页的「源码仓库」覆盖，优先级高于构建清单；该值经
+   `AZURPILOT_ANDROID_SOURCE_REPO` / `AZURPILOT_ANDROID_SOURCE_BRANCH` 注入，
+   重启 Runtime 后生效。热更**不再比对 `uv.lock`**，也不与清单记录的提交交叉核对：
+   自定义分支可与内置依赖集不同，可运行性由使用者自行保证。依赖安装保持关闭，
+   热更不会联网装包；清单中的 `uv_lock_sha256` 仍按切换后的实际值记录。
 4. 在候选目录执行 `npm ci` 和 `npm run build`，复用上游源码指纹及 npm 源重试
    策略，构建超时 600 秒。准备失败不停止当前任务、不更改正式源码或 dist。
 5. 构建成功后记录 `reloadalas` 和依赖同步标记，安全停止实例。随后写入
@@ -47,8 +49,9 @@ overlay 和依赖环境仍通过整包 Runtime 更新，见
   跟踪文件。APK 也同步此适配器，避免 Git reset 丢失 Android 更新逻辑。
 - 未标记 `local` 或缺少工具的旧镜像保持预构建前端通道。GitHub/CNB 继续
   发布兼容 dist；`AZURPILOT_ANDROID_DIST_BASE` 仅供旧通道使用。
-- `AZURPILOT_ANDROID_GIT_MIRROR` 传入 GitHub 镜像前缀，更改下载源后下次
-  会话生效，仅影响 GitHub 回退源。npm 缓存放在 `/opt/azurpilot-npm-cache`，跨源码热更复用。
+- `AZURPILOT_ANDROID_GIT_MIRROR` **已不参与源码更新**：屏蔽多源回退后，源码只
+  使用清单里的地址，不再叠加 GitHub 镜像前缀。该变量仅供旧通道的历史逻辑保留，
+  新镜像下不产生任何效果。npm 缓存放在 `/opt/azurpilot-npm-cache`，跨源码热更复用。
 - Node/npm、Git 对象和候选目录增加安装与更新空间。设备前端构建消耗 CPU、
   内存和网络；空间不足或构建失败保持旧版。
 
@@ -61,8 +64,8 @@ uv run --python 3.12 python tools/test-android-hot-update.py --serial DEVICE_SER
 ```
 
 测试使用隔离目录，不触发正式源码更新、不读取控制口令。结果保存在
-`.tmp/android-hot-update/report.json` 和 `tests.log`，覆盖事务回滚、CNB 回退、
-跨进程事件/队列及宿主退出。2026-10-12 已在 M2104K10AC（Android 11、ARM64）
+`.tmp/android-hot-update/report.json` 和 `tests.log`，覆盖事务回滚、单一更新源
+（清单缺失 / 地址不可达均失败而不回退）、跨进程事件/队列及宿主退出。2026-10-12 已在 M2104K10AC（Android 11、ARM64）
 通过 20 个测试，并完成真实 CNB 源码更新、前端构建、WebUI 重载和冷启动。
 
 ### 整包更新判定
@@ -85,14 +88,18 @@ Runtime updates. See [runtime-provisioning.md](runtime-provisioning.md).
    defaulting to `dev`. Automatic updates apply while schedulers and tools are idle;
    manual updates restore previously running instances.
 2. The service shallow-fetches the **exact target commit** into
-   `/opt/azurpilot-update/source`. Official source prefers
-   [CNB](https://cnb.cool/AzurPilot/AzurPilot), falling back to the build source on failure.
-   GitHub fallback uses the app-selected mirror. Switching sources still fetches the
-   same commit without requiring Release dist assets; custom repositories are preserved.
-3. It compares candidate and current `uv.lock`. Differences leave source and tasks
-   unchanged and return `requiresRuntimeUpdate=true` for the daily full update or the
-   full-update control in Settings. Dependency installation remains disabled so
-   unverified environments cannot bypass build and OCR validation.
+   `/opt/azurpilot-update/source`. The source address comes from the app's **Source
+   repository** setting first and the manifest's `azurpilot_update_repo` second, injected
+   as `AZURPILOT_ANDROID_SOURCE_REPO` / `AZURPILOT_ANDROID_SOURCE_BRANCH` and effective
+   after a Runtime restart. The official CNB preference, GitHub mirror prefix, and
+   build-source fallback are all removed, so an unreachable address fails and rolls back
+   instead of retrying elsewhere. An empty value in both places is treated as "update
+   source not configured": the status API reports that error and applying the update fails.
+3. Hot updates **no longer compare `uv.lock`** and no longer cross-check the manifest's
+   recorded commit: a custom branch may diverge from the bundled dependency set, and the
+   user owns that risk. Dependency installation remains disabled, so hot updates never
+   install packages over the network; `uv_lock_sha256` still records the real post-switch
+   value.
 4. The candidate runs `npm ci` and `npm run build`, reusing upstream fingerprints and
    registry retry behavior with a 600-second build timeout. Preparation failures leave
    running tasks, live source, and dist untouched.
@@ -130,8 +137,10 @@ for Python events, queues, and supervision.
 - Legacy images without the marker or tools retain prebuilt frontend behavior.
   GitHub/CNB keep publishing compatible dist. `AZURPILOT_ANDROID_DIST_BASE` serves only
   this legacy channel.
-- `AZURPILOT_ANDROID_GIT_MIRROR` supplies a GitHub mirror prefix, effective on the next
-  session for the GitHub fallback. `/opt/azurpilot-npm-cache` persists across source updates.
+- `AZURPILOT_ANDROID_GIT_MIRROR` **no longer affects source updates**: after removing the
+  multi-source fallback, source fetches use only the manifest address and never prepend a
+  GitHub mirror prefix. The variable is kept for the legacy channel and has no effect on
+  new images. `/opt/azurpilot-npm-cache` persists across source updates.
 - Node/npm, Git objects, and candidates increase storage use. Frontend builds consume
   device CPU, memory, and network resources; space or build failures retain the old
   version.
@@ -145,7 +154,8 @@ uv run --python 3.12 python tools/test-android-hot-update.py --serial DEVICE_SER
 ```
 
 The isolated suite neither updates live source nor reads control tokens. It saves
-`.tmp/android-hot-update/report.json` and `tests.log`, covering rollback, CNB fallback,
+`.tmp/android-hot-update/report.json` and `tests.log`, covering rollback, the single
+update source (a missing field or an unreachable address fails without falling back),
 process-shared events/queues, and host exit. On 2026-10-12, all 20 tests passed on
 M2104K10AC (Android 11, ARM64), followed by a real CNB source update, frontend build,
 WebUI reload, and cold-start validation.

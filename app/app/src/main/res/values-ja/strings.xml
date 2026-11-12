@@ -322,6 +322,10 @@
     <string name="settings_github_mirror_desc">アプリ、Runtime、フロントエンドの更新に使用します。CNB は中国向けの直接配信元です。ファイルのサイズと SHA-256 を検証します。</string>
     <string name="settings_mirror_custom_save">保存</string>
     <string name="settings_mirror_custom_hint">カスタムミラーの prefix（例：https://your-proxy.example.com/）</string>
+    <string name="settings_source_repo">ソースリポジトリ</string>
+    <string name="settings_source_repo_desc">ホットアップデートはこのアドレスからのみ AzurPilot のソースを取得します。空欄の場合は Runtime に組み込まれたアドレスを使用します。変更は Runtime の再起動後に有効になります。同梱の依存セットと異なるカスタムブランチの動作保証は利用者の責任です。</string>
+    <string name="settings_source_repo_hint">カスタムソースリポジトリ（例：https://github.com/you/AzurPilot.git）</string>
+    <string name="settings_source_branch_hint">ブランチ（空欄は組み込みブランチ）</string>
     <string name="settings_runtime_check">Runtime の更新を確認</string>
     <string name="settings_runtime_checking">Runtime を確認中…</string>
     <string name="settings_runtime_current">AP は最新です。Runtime の更新は不要です</string>

@@ -622,7 +622,7 @@ To maximize stability and update flexibility, the host application, Linux contai
       </div>
       <ul>
         <li><b>Trigger</b>: Checks upstream commits via <code>/android/update</code>, preferentially fetching from domestic CNB.</li>
-        <li><b>Environment Guard</b>: Compares candidate vs current <code>uv.lock</code>; automatically falls back to container update on dependency changes.</li>
+        <li><b>Custom Source</b>: Set the source repository and branch in Settings; hot updates fetch only from that address and fall back to the built-in one when empty.</li>
         <li><b>Local Build</b>: Built-in Node.js/npm builds frontend dist locally, avoiding large rootfs re-downloads.</li>
         <li><b>Atomic Rollback</b>: Records update transactions and auto-reloads; automatically rolls back source and dist if build or swap fails.</li>
       </ul>

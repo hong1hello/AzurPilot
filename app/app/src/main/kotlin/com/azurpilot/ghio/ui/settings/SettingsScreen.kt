@@ -1162,6 +1162,8 @@ fun RuntimeSettingsPage(
     val updateState by updateManager.state.collectAsStateWithLifecycle()
     val githubMirror by settings.githubMirror.collectAsStateWithLifecycle()
     val githubMirrorCustom by settings.githubMirrorCustom.collectAsStateWithLifecycle()
+    val azurpilotSourceRepo by settings.azurpilotSourceRepo.collectAsStateWithLifecycle()
+    val azurpilotSourceBranch by settings.azurpilotSourceBranch.collectAsStateWithLifecycle()
     val hotUpdateEnabled by settings.hotUpdateEnabled.collectAsStateWithLifecycle()
     val autoUpdateHour by settings.autoUpdateHour.collectAsStateWithLifecycle()
     val lanControlEnabled by settings.lanControlEnabled.collectAsStateWithLifecycle()
@@ -1557,6 +1559,49 @@ fun RuntimeSettingsPage(
             }
             Text(
                 text = stringResource(R.string.settings_runtime_restart_desc),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        // AzurPilot 源码来源：热更只从这里的地址拉代码，留空则沿用 Runtime 构建清单。
+        AppCard {
+            Text(
+                text = stringResource(R.string.settings_source_repo),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            // 与镜像前缀同样的草稿策略：点保存才落盘，避免每敲一个字符写一次 DataStore
+            var repoDraft by
+                remember(azurpilotSourceRepo) { mutableStateOf(azurpilotSourceRepo) }
+            var branchDraft by
+                remember(azurpilotSourceBranch) { mutableStateOf(azurpilotSourceBranch) }
+            OutlinedTextField(
+                value = repoDraft,
+                onValueChange = { repoDraft = it },
+                labelText = stringResource(R.string.settings_source_repo_hint),
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
+                value = branchDraft,
+                onValueChange = { branchDraft = it },
+                labelText = stringResource(R.string.settings_source_branch_hint),
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            TextButton(
+                enabled = repoDraft != azurpilotSourceRepo || branchDraft != azurpilotSourceBranch,
+                onClick = {
+                    scope.launch {
+                        settings.setAzurpilotSourceRepo(repoDraft)
+                        settings.setAzurpilotSourceBranch(branchDraft)
+                    }
+                },
+            ) {
+                AppActionLabel(AppSymbol.Save, stringResource(R.string.settings_mirror_custom_save))
+            }
+            Text(
+                text = stringResource(R.string.settings_source_repo_desc),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

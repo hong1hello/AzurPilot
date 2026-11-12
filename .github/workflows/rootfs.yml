@@ -9,6 +9,14 @@ on:
         description: AzurPilot dev commit SHA; blank uses current dev head
         required: false
         type: string
+      azurpilot_repo:
+        description: AzurPilot source repository; blank uses the official wess09/AzurPilot
+        required: false
+        type: string
+      azurpilot_branch:
+        description: AzurPilot source branch; blank uses dev
+        required: false
+        type: string
       reuse_rootfs_run_id:
         description: Existing successful rootfs run ID (matrix runs only); blank rebuilds everything
         required: false
@@ -47,6 +55,8 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       ref: ${{ steps.resolve.outputs.ref }}
+      upstream_repo: ${{ steps.resolve.outputs.upstream_repo }}
+      upstream_branch: ${{ steps.resolve.outputs.upstream_branch }}
       should_build: ${{ steps.resolve.outputs.should_build }}
       publish: ${{ steps.resolve.outputs.publish }}
       signing_ready: ${{ steps.resolve.outputs.signing_ready }}
@@ -54,6 +64,7 @@ jobs:
       version_code: ${{ steps.resolve.outputs.version_code }}
       version_name: ${{ steps.resolve.outputs.version_name }}
       app_commit: ${{ steps.resolve.outputs.app_commit }}
+      report_ready: ${{ steps.resolve.outputs.report_ready }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -63,9 +74,13 @@ jobs:
       - id: resolve
         env:
           INPUT_REF: ${{ inputs.azurpilot_ref }}
+          INPUT_REPO: ${{ inputs.azurpilot_repo }}
+          INPUT_BRANCH: ${{ inputs.azurpilot_branch }}
           INPUT_PUBLISH: ${{ inputs.publish_update }}
           INPUT_FORCE: ${{ inputs.force }}
           EVENT_NAME: ${{ github.event_name }}
+          REPORT_CERT_BASE64: ${{ secrets.AZURPILOT_DEVICE_REPORT_CERT_BASE64 }}
+          REPORT_KEY_BASE64: ${{ secrets.AZURPILOT_DEVICE_REPORT_KEY_BASE64 }}
           SIGNING_KEY: ${{ secrets.AZURPILOT_ANDROID_KEYSTORE_BASE64 }}
           SIGNING_PASSWORD: ${{ secrets.AZURPILOT_ANDROID_KEYSTORE_PASSWORD }}
           SIGNING_ALIAS: ${{ secrets.AZURPILOT_ANDROID_KEY_ALIAS }}
@@ -74,18 +89,31 @@ jobs:
         run: |
           set -euo pipefail
           ref="${INPUT_REF:-}"
+          # 源码仓库/分支可由 dispatch 覆盖，留空沿用官方源；fork 无需改文件即可构建别家的代码。
+          # The source repository and branch can be overridden per dispatch; blanks keep the
+          # official source so a fork can build someone else's code without editing files.
+          source_repo="${INPUT_REPO:-https://github.com/wess09/AzurPilot.git}"
+          source_branch="${INPUT_BRANCH:-dev}"
           if [[ -z "$ref" ]]; then
-            ref="$(git ls-remote https://github.com/wess09/AzurPilot.git refs/heads/dev | awk '{print $1}')"
+            ref="$(git ls-remote "$source_repo" "refs/heads/$source_branch" | awk '{print $1}')"
           fi
           [[ "$ref" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid AzurPilot ref: $ref" >&2; exit 1; }
+          # 设备上报凭据在非官方仓库上通常没有：缺失时降级为不打包凭据，而不是让构建失败。
+          # Device-report credentials are usually absent on non-official repositories: when
+          # missing, fall back to shipping no credentials instead of failing the build.
+          report_ready=false
+          if [[ -n "$REPORT_CERT_BASE64" && -n "$REPORT_KEY_BASE64" ]]; then report_ready=true; fi
           publish=false
           if [[ "$EVENT_NAME" == push || "$INPUT_PUBLISH" == true ]]; then publish=true; fi
           signing_ready=false
           if [[ -n "$SIGNING_KEY" && -n "$SIGNING_PASSWORD" && -n "$SIGNING_ALIAS" && -n "$SIGNING_KEY_PASSWORD" ]]; then
             signing_ready=true
           elif [[ "$publish" == true ]]; then
-            echo 'Release signing secrets are incomplete; cannot publish all APKs.' >&2
-            exit 1
+            # fork 上没有签名密钥时不再整轮失败：降级为只出 debug 包、不发布。
+            # A fork without signing secrets degrades to a debug-only build instead of
+            # failing the whole run; nothing is published in that case.
+            echo '::warning::Release signing secrets are incomplete; building debug APKs without publishing.'
+            publish=false
           fi
           # 上游不变时，推送仍可能改动 Android 或运行时产物输入；启动耗时任务前须与上次发布比较。
           should_build=true
@@ -154,6 +182,9 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           (( version_code > 0 && version_code <= 2147483647 )) || { echo 'Invalid APK version code' >&2; exit 1; }
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "upstream_repo=$source_repo" >> "$GITHUB_OUTPUT"
+          echo "upstream_branch=$source_branch" >> "$GITHUB_OUTPUT"
+          echo "report_ready=$report_ready" >> "$GITHUB_OUTPUT"
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
           echo "signing_ready=$signing_ready" >> "$GITHUB_OUTPUT"
           echo "should_build=$should_build" >> "$GITHUB_OUTPUT"
@@ -204,6 +235,12 @@ jobs:
         env:
           AZURPILOT_REF: ${{ needs.resolve.outputs.ref }}
           AZURPILOT_ABI: ${{ matrix.abi }}
+          # 构建来源与设备端热更源都跟随 dispatch 选择，二者保持一致以免热更又跳回官方。
+          # Both the build source and the device hot-update source follow the dispatch
+          # choice so a hot update cannot silently jump back to the official repository.
+          AZURPILOT_REPO: ${{ needs.resolve.outputs.upstream_repo }}
+          AZURPILOT_BRANCH: ${{ needs.resolve.outputs.upstream_branch }}
+          AZURPILOT_UPDATE_REPO: ${{ needs.resolve.outputs.upstream_repo }}
         run: bash rootfs/build/build-azurpilot.sh
       - uses: actions/upload-artifact@v4
         with:
@@ -298,6 +335,7 @@ jobs:
           python3 app/scripts/test_ocr_mtk_dispatch.py
 
       - name: Inject device reporting mTLS credentials
+        if: ${{ needs.resolve.outputs.report_ready == 'true' }}
         env:
           REPORT_CERT_BASE64: ${{ secrets.AZURPILOT_DEVICE_REPORT_CERT_BASE64 }}
           REPORT_KEY_BASE64: ${{ secrets.AZURPILOT_DEVICE_REPORT_KEY_BASE64 }}
@@ -323,6 +361,7 @@ jobs:
           KEY_ALIAS: ${{ secrets.AZURPILOT_ANDROID_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.AZURPILOT_ANDROID_KEY_PASSWORD }}
           SIGNING_READY: ${{ needs.resolve.outputs.signing_ready }}
+          REPORT_READY: ${{ needs.resolve.outputs.report_ready }}
           APP_VERSION_CODE: ${{ needs.resolve.outputs.version_code }}
           APP_VERSION_NAME: ${{ needs.resolve.outputs.version_name }}
         run: |
@@ -378,7 +417,14 @@ jobs:
                       if path.name == f'azurpilot-update-{abi}.apk':
                           assert {name.split('/')[1] for name in names if name.startswith('lib/')} == {abi}, path
           PY
-          python3 scripts/verify_device_report_assets.py --credentials-dir ../.tmp/report-credentials ../dist/*.apk
+          # 没有 CI 凭据时改为校验"APK 不含凭据"，避免私钥被误打包也避免构建失败。
+          # Without CI credentials, verify that the APK carries none: this still guards
+          # against a stray private key while keeping the build green.
+          if [ "$REPORT_READY" = true ]; then
+            python3 scripts/verify_device_report_assets.py --credentials-dir ../.tmp/report-credentials ../dist/*.apk
+          else
+            python3 scripts/verify_device_report_assets.py ../dist/*.apk
+          fi
       - name: Clear temporary device reporting credentials
         if: always()
         run: |

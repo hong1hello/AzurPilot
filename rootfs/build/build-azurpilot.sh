@@ -5,6 +5,7 @@
 #   x86_64           → Ubuntu amd64 base，需原生 x86_64 runner（ubuntu-24.04）
 # proot 不做指令翻译，rootfs 与设备 ABI 必须一一对应；CI 按矩阵各出一份并分别发布。
 # 环境变量（均有默认值）：AZURPILOT_ABI / AZURPILOT_REF / AZURPILOT_REPO /
+#   AZURPILOT_BRANCH / AZURPILOT_UPDATE_REPO（设备端热更源，缺省同 AZURPILOT_REPO）/
 #   UBUNTU_BASE / WORK_DIR / DIST_DIR / ROOTFS_EXECUTOR（chroot 默认，或 proot）；
 #   需要 uv；Node.js/npm 内置于 guest；chroot 需要 root，proot 不需要挂载权限。
 #
@@ -16,9 +17,11 @@
 #   (ubuntu-24.04). PRoot does no instruction translation, so the rootfs ABI must
 #   match the device exactly; CI builds and publishes one artifact per matrix
 #   entry. Environment (all defaulted): AZURPILOT_ABI / AZURPILOT_REF /
-#   AZURPILOT_REPO / UBUNTU_BASE / WORK_DIR / DIST_DIR / ROOTFS_EXECUTOR (chroot
-#   by default, or proot). Requires uv; chroot requires root (re-execs
-#   through sudo), while proot requires no mount privileges. Node.js/npm are bundled in the guest.
+#   AZURPILOT_REPO / AZURPILOT_BRANCH / AZURPILOT_UPDATE_REPO (device hot-update
+#   source, defaults to AZURPILOT_REPO) / UBUNTU_BASE / WORK_DIR / DIST_DIR /
+#   ROOTFS_EXECUTOR (chroot by default, or proot). Requires uv; chroot requires root
+#   (re-execs through sudo), while proot requires no mount privileges.
+#   Node.js/npm are bundled in the guest.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -27,6 +30,10 @@ ROOTFS_DIR="$WORK_DIR/rootfs"
 DIST_DIR="${DIST_DIR:-$REPO_ROOT/dist}"
 SOURCE_REPO="${AZURPILOT_REPO:-https://github.com/wess09/AzurPilot.git}"
 SOURCE_BRANCH="${AZURPILOT_BRANCH:-dev}"
+# 设备端热更只认这个地址，不再把官方源换成 CNB；缺省与构建来源一致。
+# The device hot-update reads only this address; the official-to-CNB rewrite is gone,
+# and it defaults to the build source when unset.
+SOURCE_UPDATE_REPO="${AZURPILOT_UPDATE_REPO:-$SOURCE_REPO}"
 NODE_VERSION=24.21.0
 # 上游源码固定到具体提交，保证产物可复现；CI 会用 AZURPILOT_REF 覆盖为最新解析结果。
 SOURCE_REF="${AZURPILOT_REF:-1841cb1941751a81ab70668b4d2383c369c4506e}"
@@ -177,6 +184,7 @@ mkdir -p "$ROOTFS_DIR/opt/azurpilot/log"
 # 生成 BUILD_MANIFEST：记录上游提交、ABI 与关键产物哈希；rootfs_version 由上游提交
 # 与 rootfs 输入内容共同决定，供 app 端 RootfsProvisioner 识别运行时版本。
 SOURCE_COMMIT="$SOURCE_COMMIT" SOURCE_REPO="$SOURCE_REPO" SOURCE_BRANCH="$SOURCE_BRANCH" \
+    AZURPILOT_UPDATE_REPO="$SOURCE_UPDATE_REPO" \
     NODE_VERSION="$NODE_VERSION" REPO_ROOT="$REPO_ROOT" \
     TARGET_ABI="$TARGET_ABI" \
     ROOTFS_DIR="$ROOTFS_DIR" python3 - <<'PY'
@@ -201,9 +209,12 @@ manifest = {
     'runtime': 'azurpilot-android',
     'android_host_commit': host_commit,
     'azurpilot_repo': os.environ['SOURCE_REPO'],
-    'azurpilot_update_repo': ('https://cnb.cool/AzurPilot/AzurPilot.git'
-                            if os.environ['SOURCE_REPO'].rstrip('/').removesuffix('.git') ==
-                            'https://github.com/wess09/AzurPilot' else os.environ['SOURCE_REPO']),
+    # 更新源只认显式指定：AZURPILOT_UPDATE_REPO 优先，否则与构建来源一致。
+    # 不再把官方源替换成 CNB 镜像——热更侧已屏蔽官方判定与多源回退。
+    # The update source is explicit only: AZURPILOT_UPDATE_REPO wins, otherwise it
+    # matches the build source. The official-to-CNB substitution is gone because the
+    # hot-update side no longer resolves an official source or retries other remotes.
+    'azurpilot_update_repo': (os.environ.get('AZURPILOT_UPDATE_REPO') or os.environ['SOURCE_REPO']),
     'azurpilot_branch': os.environ['SOURCE_BRANCH'],
     'azurpilot_commit': os.environ['SOURCE_COMMIT'],
     'rootfs_arch': os.environ['TARGET_ABI'],

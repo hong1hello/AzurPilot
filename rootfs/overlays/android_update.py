@@ -1,9 +1,16 @@
 """用运行时内置 Git 和 Node.js 更新源码与前端，保留上游恢复协议。
 
+源码只从构建清单记录的自定义仓库获取：官方源的 CNB 优先、GitHub 镜像前缀与
+构建来源回退均已屏蔽，任何更新都不得改从其它地址取代码。
+
 候选源码与前端在正式目录外准备；锁文件变化交给整包更新。切换前保存恢复日志，
 进程中断后由 android_host 在启动 WebUI 前回滚。旧运行时继续使用预构建前端。
 
 Updates source and frontend with bundled Git and Node.js using upstream recovery protocols.
+
+Source comes solely from the custom repository recorded in the build manifest: the
+official CNB preference, GitHub mirror prefixes, and build-source fallback are all
+removed, so no update may fetch code from another address.
 
 Prepares candidates outside the live tree and delegates lockfile changes to full updates.
 A journal allows android_host to roll back interrupted switches before starting the WebUI.
@@ -26,8 +33,14 @@ import time
 
 STATE_FILE = 'config/android-update-state.json'
 JOURNAL_FILE = 'config/android-update-transaction.json'
-CNB_REPOSITORY = 'https://cnb.cool/AzurPilot/AzurPilot.git'
-GITHUB_REPOSITORY = 'https://github.com/wess09/AzurPilot.git'
+# 清单里缺失该字段时不再回退到任何内置地址，直接按"更新源未配置"处理。
+# A missing field no longer falls back to any built-in address; it is treated
+# as an unconfigured update source instead.
+UPDATE_REPO_KEY = 'azurpilot_update_repo'
+# App 设置页写入的自定义源码来源，优先级高于构建清单。
+# Custom source written by the app settings screen; it wins over the build manifest.
+OVERRIDE_REPO_ENV = 'AZURPILOT_ANDROID_SOURCE_REPO'
+OVERRIDE_BRANCH_ENV = 'AZURPILOT_ANDROID_SOURCE_BRANCH'
 
 
 def write_json(path, value):
@@ -186,32 +199,41 @@ def patch_service(module):
         _ls_remote_error = ''
 
         def sources(self):
-            """优先从 CNB 获取官方增量，失败时退回构建来源；自定义仓库保持原样。
+            """返回当前生效的更新源，优先取 App 设置的自定义仓库。
 
-            Prefers CNB for official updates with a build-source fallback; preserves custom sources.
+            解析顺序：环境变量（App 设置页）> 构建清单 ``azurpilot_update_repo``。
+            两者都没有时返回空列表，由调用方决定是让应用更新失败还是把
+            "更新源未配置"透出到状态里，避免把配置缺失伪装成"已是最新"。
+            分支同理：环境变量 > ``azurpilot_branch`` > ``dev``。
+
+            / Returns the effective update source, preferring the app-configured repository.
+
+            Resolution order: environment override (app settings) > manifest
+            ``azurpilot_update_repo``. When neither exists an empty list is returned so the
+            caller can either fail the apply or surface "update source not configured"
+            instead of disguising a missing configuration as "already up to date". The
+            branch resolves the same way: override > ``azurpilot_branch`` > ``dev``.
             """
             manifest = module.frontend_deploy.android_manifest(self.root)
-            repository = manifest.get('azurpilot_repo') or self.updater.Repository
-            branch = manifest.get('azurpilot_branch') or 'dev'
-            mirror = os.environ.get('AZURPILOT_ANDROID_GIT_MIRROR', '')
-            if mirror and repository.startswith('https://github.com/'):
-                repository = mirror + repository
-            official = manifest.get('azurpilot_repo', '').rstrip('/').removesuffix('.git') == \
-                GITHUB_REPOSITORY.removesuffix('.git')
-            primary = manifest.get('azurpilot_update_repo') or (CNB_REPOSITORY if official else repository)
-            return list(dict.fromkeys((primary, repository))), branch
+            repository = (os.environ.get(OVERRIDE_REPO_ENV, '').strip()
+                          or str(manifest.get(UPDATE_REPO_KEY) or '').strip())
+            branch = (os.environ.get(OVERRIDE_BRANCH_ENV, '').strip()
+                      or str(manifest.get('azurpilot_branch') or '').strip()
+                      or 'dev')
+            return ([repository] if repository else []), branch
 
         def upstream_head(self, force=False):
-            """探测上游 HEAD，并记录失败原因供 status() 透出。
+            """探测自定义更新源的 HEAD，失败原因经 status() 透出。
 
-            裸吞异常会把「检查失败」伪装成「已是最新」（error 恒空、available 恒
-            false），与 _run() 向上传递的约定相悖；失败原因带 git stderr 尾部，
-            DNS/TLS 类故障可直接定位。
-            / Probes the upstream HEAD and records the failure reason for status().
+            只有一个源、没有回退链：探测失败就是失败，不会被"换个地址再试"
+            掩盖。裸吞异常会把「检查失败」伪装成「已是最新」（error 恒空、
+            available 恒 false），失败原因带 git stderr 尾部以便定位 DNS/TLS。
+            / Probes the custom source HEAD and surfaces the failure reason via status().
 
-            Swallowed exceptions disguise "check failed" as "already up to date"
-            (empty error, false available), contrary to _run()'s propagation
-            convention; the reason carries the git stderr tail so DNS/TLS
+            There is one source and no fallback chain: a failed probe stays failed
+            instead of being masked by a retry against another address. Swallowed
+            exceptions disguise "check failed" as "already up to date" (empty error,
+            false available); the reason carries the git stderr tail so DNS/TLS
             failures are directly diagnosable.
             """
             if not tools_ready(self.root):
@@ -220,20 +242,23 @@ def patch_service(module):
             if not force and cached and time.monotonic() - cached[0] < 60:
                 return cached[1]
             repositories, branch = self.sources()
+            if not repositories:
+                self._ls_remote_cache = (time.monotonic(), '')
+                self._ls_remote_error = (f'未配置更新源：设置页源码仓库为空，且清单缺少 '
+                                         f'{UPDATE_REPO_KEY}')
+                return ''
+            repository = repositories[0]
             head = ''
             failure = ''
-            for repository in repositories:
-                try:
-                    output = git(self.root, 'ls-remote', repository, f'refs/heads/{branch}', timeout=15)
-                    head = output.split()[0] if output else ''
-                except (OSError, subprocess.SubprocessError) as error:
-                    head = ''
-                    detail = (getattr(error, 'stderr', None) or str(error)).strip()
-                    failure = f'{repository}: {detail}'[-300:]
-                if re.fullmatch(r'[0-9a-f]{40}', head):
-                    failure = ''
-                    break
+            try:
+                output = git(self.root, 'ls-remote', repository, f'refs/heads/{branch}', timeout=15)
+                head = output.split()[0] if output else ''
+            except (OSError, subprocess.SubprocessError) as error:
+                detail = (getattr(error, 'stderr', None) or str(error)).strip()
+                failure = f'{repository}: {detail}'[-300:]
+            if not re.fullmatch(r'[0-9a-f]{40}', head):
                 head = ''
+                failure = failure or f'{repository}: 未取到 refs/heads/{branch} 的有效提交'
             self._ls_remote_cache = (time.monotonic(), head)
             self._ls_remote_error = failure
             return head
@@ -293,28 +318,27 @@ def patch_service(module):
                     full = True
                     raise RuntimeError('源码仓库损坏，请更新完整运行时') from error
                 manifest = module.frontend_deploy.android_manifest(self.root)
-                if old_head != manifest.get('azurpilot_commit'):
-                    full = True
-                    raise RuntimeError('源码与版本记录不一致，请更新完整运行时')
+                repositories, _ = self.sources()
+                if not repositories:
+                    raise RuntimeError('未配置更新源：请在设置页填写源码仓库，或使用含 '
+                                       f'{UPDATE_REPO_KEY} 的运行时')
                 shutil.rmtree(stage, ignore_errors=True)
                 stage.mkdir()
                 candidate = stage / 'source'
                 git(stage, 'clone', '--local', '--no-hardlinks', '--no-checkout',
                     str(self.root), str(candidate))
-                repositories, _ = self.sources()
-                for index, repository in enumerate(repositories):
-                    git(candidate, 'remote', 'set-url', 'origin', repository)
-                    try:
-                        git(candidate, 'fetch', '--depth', '1', 'origin', target)
-                        break
-                    except (OSError, subprocess.SubprocessError):
-                        if index == len(repositories) - 1:
-                            raise
+                # 单一来源：不做多源重试，失败直接走下面的回滚路径。
+                # Single source: no multi-source retry; failure goes straight to rollback.
+                git(candidate, 'remote', 'set-url', 'origin', repositories[0])
+                git(candidate, 'fetch', '--depth', '1', 'origin', target)
                 git(candidate, 'reset', '--hard', target)
-                # 禁止用新源码假装已安装新依赖；锁环境仍由整包构建和 OCR 门验证。
-                if (candidate / 'uv.lock').read_bytes() != (self.root / 'uv.lock').read_bytes():
-                    full = True
-                    raise RuntimeError('Python 依赖已变化，请更新完整运行时')
+                # 不再比对 uv.lock，也不与清单记录交叉核对：自定义分支可与内置 Runtime
+                # 的依赖集不同，由使用者自行保证可运行。依赖安装仍是关闭的，热更不会
+                # 联网装包；清单里的 uv_lock_sha256 照实记录当次实际值。
+                # No uv.lock comparison and no cross-check against the manifest record: a
+                # custom branch may differ from the built-in dependency set and the user owns
+                # that risk. Dependency installation stays disabled so hot updates never
+                # install packages over the network; the manifest still records the real hash.
                 self._phase('dist')
                 build_frontend(module.frontend_deploy, candidate)
                 from module.runtime.process_manager import ProcessManager

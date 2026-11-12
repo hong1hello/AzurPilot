@@ -329,6 +329,10 @@
     <string name="settings_github_mirror_desc">Used for App, Runtime, and frontend updates. CNB provides direct downloads in China. File size and SHA-256 are verified.</string>
     <string name="settings_mirror_custom_save">Save</string>
     <string name="settings_mirror_custom_hint">Custom mirror prefix, e.g. https://your-proxy.example.com/</string>
+    <string name="settings_source_repo">Source repository</string>
+    <string name="settings_source_repo_desc">Hot updates fetch AzurPilot source only from this address. Leave it empty to keep the address built into the Runtime; restart the Runtime to apply changes. A custom branch that diverges from the bundled dependency set is your responsibility to keep runnable.</string>
+    <string name="settings_source_repo_hint">Custom source repository, e.g. https://github.com/you/AzurPilot.git</string>
+    <string name="settings_source_branch_hint">Branch (empty keeps the built-in branch)</string>
     <string name="settings_runtime_check">Check Runtime update</string>
     <string name="settings_runtime_checking">Checking Runtime…</string>
     <string name="settings_runtime_current">AP is up to date; no Runtime update needed</string>

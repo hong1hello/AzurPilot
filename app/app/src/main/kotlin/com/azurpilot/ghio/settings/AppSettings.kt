@@ -149,6 +149,23 @@ data class AppSettings(
     @PrefKey(default = "") val githubMirrorCustom: String = "",
 
     /**
+     * 自定义 AzurPilot 源码仓库（热更拉取地址）；空串表示沿用 Runtime 内置清单地址。
+     * 改动后需重启 Runtime 才注入新的进程环境。
+     *
+     * Custom AzurPilot source repository for hot updates; an empty string keeps the address
+     * recorded in the Runtime's build manifest. Restart the Runtime for a new value to be
+     * injected into the guest process environment.
+     */
+    @PrefKey(default = "") val azurpilotSourceRepo: String = "",
+
+    /**
+     * 自定义源码分支；空串表示沿用 Runtime 内置清单分支（通常为 dev）。
+     *
+     * Custom source branch; an empty string keeps the manifest branch (usually dev).
+     */
+    @PrefKey(default = "") val azurpilotSourceBranch: String = "",
+
+    /**
      * 激进后台保活系统 / Persistent aggressive keep-alive system
      *
      * 包含后台无音量音频 + 前台 1px 浮窗像素 + 伴侣设备服务 + 无障碍守护

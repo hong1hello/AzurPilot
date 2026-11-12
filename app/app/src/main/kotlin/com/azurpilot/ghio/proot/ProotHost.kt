@@ -366,6 +366,11 @@ class ProotHost(
             ReleaseUrls.distributionBase(settings.githubMirror.value, settings.githubMirrorCustom.value),
         "AZURPILOT_ANDROID_GIT_MIRROR" to
             ReleaseUrls.mirrorPrefix(settings.githubMirror.value, settings.githubMirrorCustom.value),
+        // 设置页填写的自定义源码来源；空串时运行时回落到构建清单记录的地址。
+        // Custom source typed in Settings; an empty value makes the runtime fall back to
+        // the address recorded in the build manifest.
+        "AZURPILOT_ANDROID_SOURCE_REPO" to settings.azurpilotSourceRepo.value.trim(),
+        "AZURPILOT_ANDROID_SOURCE_BRANCH" to settings.azurpilotSourceBranch.value.trim(),
     )
 
     /**

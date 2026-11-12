@@ -228,6 +228,16 @@ class AppSettingsManager(private val context: Context) : AppSettingsGateway {
     /** 自定义镜像前缀 / The custom mirror prefix. */
     val githubMirrorCustom: StateFlow<String> = _githubMirrorCustom.asStateFlow()
 
+    private val _azurpilotSourceRepo = MutableStateFlow(defaults.azurpilotSourceRepo)
+
+    /** 自定义 AzurPilot 源码仓库（重启 Runtime 生效）/ The custom AzurPilot source repository. */
+    val azurpilotSourceRepo: StateFlow<String> = _azurpilotSourceRepo.asStateFlow()
+
+    private val _azurpilotSourceBranch = MutableStateFlow(defaults.azurpilotSourceBranch)
+
+    /** 自定义源码分支（重启 Runtime 生效）/ The custom source branch. */
+    val azurpilotSourceBranch: StateFlow<String> = _azurpilotSourceBranch.asStateFlow()
+
     init {
         migrateLegacyMirrorSwitch()
         // 一处 collect 铺开到各字段，而不是每个字段各起一条 stateIn：
@@ -266,6 +276,8 @@ class AppSettingsManager(private val context: Context) : AppSettingsGateway {
                 _autoUpdateHour.value = s.autoUpdateHour.toIntOrNull()?.coerceIn(0, 23) ?: 8
                 _githubMirror.value = s.githubMirror
                 _githubMirrorCustom.value = s.githubMirrorCustom
+                _azurpilotSourceRepo.value = s.azurpilotSourceRepo
+                _azurpilotSourceBranch.value = s.azurpilotSourceBranch
                 // 必须是最后一行：置位即宣告上面全部就位
                 _loaded.value = true
             }
@@ -456,6 +468,18 @@ class AppSettingsManager(private val context: Context) : AppSettingsGateway {
     suspend fun setGithubMirrorCustom(prefix: String): Unit =
         with(AppSettingsSchema) {
             context.dataStore.edit { it[githubMirrorCustom] = prefix }
+        }
+
+    /** 写入自定义源码仓库；空串恢复为清单内置地址 / Writes the custom source repository. */
+    suspend fun setAzurpilotSourceRepo(repository: String): Unit =
+        with(AppSettingsSchema) {
+            context.dataStore.edit { it[azurpilotSourceRepo] = repository.trim() }
+        }
+
+    /** 写入自定义源码分支；空串恢复为清单内置分支 / Writes the custom source branch. */
+    suspend fun setAzurpilotSourceBranch(branch: String): Unit =
+        with(AppSettingsSchema) {
+            context.dataStore.edit { it[azurpilotSourceBranch] = branch.trim() }
         }
 
     /**

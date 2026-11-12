@@ -105,6 +105,7 @@ class LocalUpdateTest(unittest.TestCase):
         (self.root / 'config').mkdir()
         (self.root / 'config/account.db').write_bytes(b'user database')
         self.manifest = {'azurpilot_commit': self.old, 'azurpilot_repo': str(self.origin),
+                         'azurpilot_update_repo': str(self.origin),
                          'azurpilot_branch': 'dev', 'hot_update_mode': 'local',
                          'rootfs_version': 'factory-image-1234567890'}
         adapter.write_json(self.root / 'BUILD_MANIFEST', self.manifest)
@@ -181,16 +182,34 @@ class LocalUpdateTest(unittest.TestCase):
         self.assert_old()
         self.cleanup.assert_not_called()
 
-    def test_lock_change_requires_full_runtime(self):
+    def test_lock_change_no_longer_blocks_hot_update(self):
+        """删掉依赖比对后，锁文件差异不再把更新推给整包通道。
+
+        With the dependency comparison removed, a lockfile difference no longer
+        defers the update to the full-runtime channel.
+        """
         (self.origin / 'uv.lock').write_text('different dependencies\n')
         adapter.git(self.origin, 'add', '.')
         adapter.git(self.origin, 'commit', '-m', 'changed lock')
         self.target = adapter.git(self.origin, 'rev-parse', 'HEAD')
-        self.assertTrue(self.run_update()['requiresRuntimeUpdate'])
-        self.assertTrue(self.service.status()['requiresRuntimeUpdate'])
-        self.assertFalse(self.service.status()['available'])
-        self.assert_old()
-        self.cleanup.assert_not_called()
+        state = self.run_update()
+        self.assertEqual(state['result'], 'updated')
+        self.assertFalse(state.get('requiresRuntimeUpdate'))
+        self.assertEqual(adapter.git(self.root, 'rev-parse', 'HEAD'), self.target)
+        self.assertEqual((self.root / 'uv.lock').read_text(), 'different dependencies\n')
+        self.assertFalse(self.service.status()['requiresRuntimeUpdate'])
+
+    def test_manifest_commit_mismatch_no_longer_blocks_hot_update(self):
+        """清单记录的提交与 HEAD 不一致时仍可更新（手动改过清单的场景）。
+
+        A manifest commit that differs from HEAD still allows the update, which is
+        what happens after the manifest is edited by hand.
+        """
+        adapter.write_json(self.root / 'BUILD_MANIFEST',
+                           dict(self.manifest, azurpilot_commit='f' * 40))
+        self.assertEqual(self.run_update()['result'], 'updated')
+        self.assertEqual(adapter.git(self.root, 'rev-parse', 'HEAD'), self.target)
+        self.assertEqual(self.frontend.android_manifest(self.root)['azurpilot_commit'], self.target)
 
     def test_failure_after_reset_rolls_back_dist_and_manifest(self):
         actual = adapter.write_json
@@ -254,31 +273,72 @@ class LocalUpdateTest(unittest.TestCase):
             self.assertTrue(self.run_update()['requiresRuntimeUpdate'])
         self.assert_old()
 
-    def test_official_source_prefers_cnb_with_selected_github_fallback(self):
-        manifest = dict(self.manifest, azurpilot_repo=adapter.GITHUB_REPOSITORY)
-        adapter.write_json(self.root / 'BUILD_MANIFEST', manifest)
-        with patch.dict(os.environ, AZURPILOT_ANDROID_GIT_MIRROR='https://mirror.example/'):
-            repositories, branch = self.service.sources()
-        self.assertEqual(repositories, [adapter.CNB_REPOSITORY,
-                                       'https://mirror.example/' + adapter.GITHUB_REPOSITORY])
+    def test_sources_returns_only_the_manifest_update_repository(self):
+        custom = 'https://git.example/AzurPilot-fork.git'
+        adapter.write_json(self.root / 'BUILD_MANIFEST',
+                           dict(self.manifest, azurpilot_repo='https://github.com/wess09/AzurPilot.git',
+                                azurpilot_update_repo=custom))
+        repositories, branch = self.service.sources()
+        self.assertEqual(repositories, [custom])
         self.assertEqual(branch, 'dev')
 
-    def test_cnb_probe_failure_uses_build_source(self):
-        manifest = dict(self.manifest, azurpilot_update_repo=adapter.CNB_REPOSITORY)
-        adapter.write_json(self.root / 'BUILD_MANIFEST', manifest)
-        actual = adapter.git
-        def offline_cnb(root, *args, **kwargs):
-            if adapter.CNB_REPOSITORY in args:
-                raise subprocess.TimeoutExpired(['git'], 15)
-            return actual(root, *args, **kwargs)
-        with patch.object(adapter, 'git', side_effect=offline_cnb):
-            self.assertEqual(self.service.upstream_head(), self.target)
+    def test_mirror_prefix_no_longer_rewrites_source(self):
+        custom = 'https://github.com/someone/AzurPilot-fork.git'
+        adapter.write_json(self.root / 'BUILD_MANIFEST',
+                           dict(self.manifest, azurpilot_update_repo=custom))
+        with patch.dict(os.environ, AZURPILOT_ANDROID_GIT_MIRROR='https://mirror.example/'):
+            repositories, _ = self.service.sources()
+        self.assertEqual(repositories, [custom])
 
-    def test_unavailable_primary_fetch_uses_same_target_from_fallback(self):
-        manifest = dict(self.manifest, azurpilot_update_repo=str(self.base / 'missing-repository'))
-        adapter.write_json(self.root / 'BUILD_MANIFEST', manifest)
-        self.assertEqual(self.run_update()['result'], 'updated')
+    def test_app_setting_repo_overrides_manifest(self):
+        """设置页填的仓库优先于构建清单，清单地址不可达也能正常更新。
+
+        The repository typed in Settings wins over the build manifest, so an
+        unreachable manifest address still updates successfully.
+        """
+        adapter.write_json(self.root / 'BUILD_MANIFEST',
+                           dict(self.manifest, azurpilot_update_repo=str(self.base / 'missing-repository')))
+        with patch.dict(os.environ, {adapter.OVERRIDE_REPO_ENV: str(self.origin)}):
+            self.assertEqual(self.service.sources()[0], [str(self.origin)])
+            self.assertEqual(self.run_update()['result'], 'updated')
         self.assertEqual(adapter.git(self.root, 'rev-parse', 'HEAD'), self.target)
+
+    def test_app_setting_branch_overrides_manifest(self):
+        """设置页填的分支优先于清单分支。
+
+        The branch typed in Settings wins over the manifest branch.
+        """
+        adapter.write_json(self.root / 'BUILD_MANIFEST',
+                           dict(self.manifest, azurpilot_branch='missing-branch'))
+        self.assertEqual(self.service.sources()[1], 'missing-branch')
+        with patch.dict(os.environ, {adapter.OVERRIDE_BRANCH_ENV: 'dev'}):
+            self.assertEqual(self.service.sources()[1], 'dev')
+
+    def test_missing_update_repo_reports_unconfigured_source(self):
+        manifest = dict(self.manifest)
+        manifest.pop('azurpilot_update_repo')
+        adapter.write_json(self.root / 'BUILD_MANIFEST', manifest)
+        self.assertEqual(self.service.sources(), ([], 'dev'))
+        self.assertEqual(self.service.upstream_head(), '')
+        status = self.service.status()
+        self.assertFalse(status['available'])
+        self.assertIn('azurpilot_update_repo', status['error'])
+        state = self.run_update()
+        self.assertEqual(state['result'], 'failed')
+        self.assertIn('azurpilot_update_repo', state['error'])
+        # 清单本身被本用例改过，不能复用 assert_old 的整份清单比对。
+        self.assertEqual(adapter.git(self.root, 'rev-parse', 'HEAD'), self.old)
+        self.assertEqual(self.frontend.android_manifest(self.root), manifest)
+        self.assertEqual((self.root / 'frontend/dist/index.html').read_text(), 'old')
+
+    def test_unreachable_update_repo_fails_without_fallback(self):
+        broken = dict(self.manifest, azurpilot_update_repo=str(self.base / 'missing-repository'))
+        adapter.write_json(self.root / 'BUILD_MANIFEST', broken)
+        self.assertEqual(self.run_update()['result'], 'failed')
+        # 单一来源：取不到就直接失败，不会改从 azurpilot_repo 再试一次。
+        self.assertEqual(adapter.git(self.root, 'rev-parse', 'HEAD'), self.old)
+        self.assertEqual((self.root / 'frontend/dist/index.html').read_text(), 'old')
+        self.assertEqual(self.frontend.android_manifest(self.root), broken)
 
     def test_failed_recovery_keeps_journal_and_dist_backup(self):
         actual = adapter.write_json
