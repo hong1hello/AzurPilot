@@ -154,9 +154,16 @@ FRONTEND="$ROOTFS_DIR/opt/azurpilot/frontend"
 guest /bin/sh -c 'cd /opt/azurpilot/frontend && npm ci --cache /opt/npm-cache --no-audit --no-fund && npm run build'
 # 复用上游 deploy/frontend.py 自己的指纹逻辑计算前端源码指纹，随 dist 打包，
 # 避免在本仓另写一份会与上游漂移的实现。
+# 必须先把源码根放进 sys.path：新版上游 deploy/frontend.py 里有
+# `from deploy.atomic import atomic_write` 这类包内导入，只按文件路径加载会
+# ModuleNotFoundError: No module named 'deploy'。
+# The source root must be on sys.path first: newer upstream deploy/frontend.py does
+# intra-package imports (`from deploy.atomic import ...`), so loading it purely by
+# file location raises ModuleNotFoundError.
 AZURPILOT_SOURCE="$ROOTFS_DIR/opt/azurpilot" python3 - <<'PY'
-import importlib.util, os, pathlib
+import importlib.util, os, pathlib, sys
 root = pathlib.Path(os.environ['AZURPILOT_SOURCE'])
+sys.path.insert(0, str(root))
 spec = importlib.util.spec_from_file_location('azurpilot_frontend', root / 'deploy/frontend.py')
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
