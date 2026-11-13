@@ -140,7 +140,7 @@ data class AppSettings(
      * [com.azurpilot.ghio.update.ReleaseUrls.MIRRORS]) / custom.
      * New installations default to CNB; existing saved choices are retained.
      */
-    @PrefKey(default = "cnb") val githubMirror: String = "cnb",
+    @PrefKey(default = "direct") val githubMirror: String = "direct",
 
     /**
      * 自定义镜像前缀（ghproxy 形态：前缀 + 完整 GitHub URL）；仅 githubMirror=custom 时生效 / The custom mirror prefix

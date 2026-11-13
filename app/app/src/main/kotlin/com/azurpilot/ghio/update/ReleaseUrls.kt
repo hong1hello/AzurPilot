@@ -17,11 +17,17 @@ package com.azurpilot.ghio.update
  * or enter a custom prefix in Settings (same ghproxy form).
  */
 internal object ReleaseUrls {
-    const val BASE = "https://github.com/wess09/AzurPilot-for-Android/releases/download/azurpilot-android-latest/"
+    // 指向本 fork 的 Release：应用内更新通道（APK 与 rootfs）都读它。
+    // Points at this fork's release; both the APK and rootfs update channels read it.
+    const val BASE = "https://github.com/hong1hello/AzurPilot/releases/download/azurpilot-android-latest/"
     const val INDEX = "${BASE}latest.json"
 
     /** CNB 国内源，与 GitHub 共用固定 tag 和附件名称。 / CNB source sharing GitHub's fixed tag and asset names. */
-    const val CNB_BASE = "https://cnb.cool/azurpilot/AzurPilot-for-Android/-/releases/download/azurpilot-android-latest/"
+    // 本 fork 没有 cnb.cool 镜像，CNB 源退化为同一个地址；保留常量是为了让
+    // isReleaseUrl() 与设置里的 cnb 选项仍然可用。
+    // This fork has no cnb.cool mirror, so the CNB source degrades to the same URL;
+    // the constant stays so isReleaseUrl() and the cnb setting keep working.
+    const val CNB_BASE = "https://github.com/hong1hello/AzurPilot/releases/download/azurpilot-android-latest/"
 
     /** 设置存储值：CNB 国内源。 / Settings value for the domestic CNB source. */
     const val CNB = "cnb"

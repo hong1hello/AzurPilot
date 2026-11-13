@@ -402,6 +402,19 @@ jobs:
             cp "../.tmp/azurpilot-artifact/$abi/BUILD_MANIFEST" app/src/main/assets/rootfs/BUILD_MANIFEST
             ./gradlew "$build_variant" -Pazurpilot.releaseAbi="$abi" "${gradle_args[@]}"
             cp "app/build/outputs/apk/$variant/"*.apk "../dist/azurpilot-full-$abi.apk"
+            # 正向校验「完整包确实内置了同架构 rootfs」：缺了它首启会提示没有运行时并转去
+            # 网络下载，表现和「打包时没带上」几乎一样，事后很难分辨，所以在这里拦死。
+            # Assert positively that the full APK really embeds the matching-arch rootfs:
+            # without it the first launch reports "no runtime" and falls back to the network,
+            # which is indistinguishable from a packaging slip after the fact.
+            python3 - "../dist/azurpilot-full-$abi.apk" <<'PY'
+          import sys, zipfile
+          path = sys.argv[1]
+          with zipfile.ZipFile(path) as archive:
+              names = set(archive.namelist())
+          assert 'assets/rootfs/rootfs.tar.xz' in names, f'{path} 缺少内置 rootfs.tar.xz'
+          assert 'assets/rootfs/BUILD_MANIFEST' in names, f'{path} 缺少内置 BUILD_MANIFEST'
+          PY
             rm app/src/main/assets/rootfs/rootfs.tar.xz app/src/main/assets/rootfs/BUILD_MANIFEST
           done
 
