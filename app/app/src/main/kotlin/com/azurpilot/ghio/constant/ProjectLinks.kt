@@ -15,7 +15,7 @@ package com.azurpilot.ghio.constant
  */
 object ProjectLinks {
     /** Issue 列表页：设置页「反馈 Bug」的落点 / The issue list: where the settings "report a bug" row lands. */
-    const val ISSUES = "https://github.com/wess09/AzurPilot-for-Android/issues"
+    const val ISSUES = "https://github.com/hong1hello/AzurPilot/issues"
 
     /** QQ 反馈群：设置页「加群反馈」的落点 / The QQ feedback group, opened from the settings "join feedback group" row. */
     const val QQ_FEEDBACK_GROUP = "https://qm.qq.com/q/mrfxp743zc"
