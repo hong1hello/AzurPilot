@@ -131,10 +131,18 @@ def git(root, *args, timeout=900):
     """
     try:
         result = subprocess.run(
-            ['git', '-c', 'http.lowSpeedLimit=1024', '-c', 'http.lowSpeedTime=30', *args],
+            # 阈值放宽到 256 B/s、容忍 60s：国内直连 GitHub 常见「能连但很慢」，
+            # 原来的 1024 B/s × 30s 会把还在推进的传输判死。
+            ['git', '-c', 'http.lowSpeedLimit=256', '-c', 'http.lowSpeedTime=60', *args],
             cwd=root, check=True, capture_output=True, text=True, encoding='utf-8', errors='replace',
             timeout=timeout, env={**os.environ, 'GIT_TERMINAL_PROMPT': '0'},
         )
+    except subprocess.TimeoutExpired as error:
+        # 超时不是 CalledProcessError，得单独兜：否则会冒到上层变成一句无信息的 repr
+        raise RuntimeError(
+            f'git {args[0]} 超时（{timeout}s）：网络能到 GitHub 但太慢，'
+            '可开全局代理或改用更快的网络后重试'
+        ) from error
     except subprocess.CalledProcessError as error:
         detail = ((error.stderr or '') or (error.stdout or '')).strip()
         tail = detail.splitlines()[-3:] if detail else []

@@ -93,7 +93,6 @@ import com.azurpilot.ghio.ui.screen.ScreenPage
 import com.azurpilot.ghio.ui.oobe.OobeScreen
 import com.azurpilot.ghio.ui.settings.AboutSettingsPage
 import com.azurpilot.ghio.ui.settings.AdvancedSettingsPage
-import com.azurpilot.ghio.ui.settings.DeviceReportSettingsPage
 import com.azurpilot.ghio.ui.settings.DisplaySettingsPage
 import com.azurpilot.ghio.ui.settings.KeepAliveSettingsPage
 import com.azurpilot.ghio.ui.settings.LicenseDetailPage
@@ -282,9 +281,6 @@ fun AppRoot(
         if (!showOobePreview) oobeStateHolder.removeState("preview")
     }
     val oobeVisible = settingsLoaded && (!oobeCompleted || showOobePreview)
-    val compatNoticeShown by appSettings.compatNoticeShown.collectAsStateWithLifecycle()
-    var compatNoticeDismissed by rememberSaveable { mutableStateOf(false) }
-    var showCompatNoticeDialog by rememberSaveable { mutableStateOf(false) }
 
     AzurPilotTheme(
         darkTheme = darkTheme,
@@ -525,115 +521,6 @@ fun AppRoot(
             // 首启「机型支持列表」弹窗：进入主页后触发；弹窗状态一旦激活即保持展示，避免后台异步状态变动导致弹窗自动消失。
             // 排序最末：必须等 App 更新与 Runtime 更新两项检查都出结果（否则更新弹窗会在它
             // 触发后才落下，两个 AlertDialog 叠在一起）；Runtime 更新弹窗退场（稍后）后才轮到它。
-            // 勾选「不再弹出」才持久化抑制；点击「去提交」前往 GitHub 登记并标记已处理。
-            LaunchedEffect(
-                hangarActive,
-                onSubPage,
-                showProvision,
-                isAppLocked,
-                settingsLoaded,
-                oobeVisible,
-                communityNoticeAcknowledged,
-                compatNoticeShown,
-                compatNoticeDismissed,
-                readiness.needsGuidance,
-                appUpdateState,
-                runtimeCheck,
-                fullUpdatePending,
-                runtimePromptDismissed,
-                localRuntimeEnabled,
-            ) {
-                if (
-                    localRuntimeEnabled && hangarActive &&
-                        !onSubPage &&
-                        !showProvision &&
-                        !isAppLocked &&
-                        settingsLoaded &&
-                        !oobeVisible &&
-                        communityNoticeAcknowledged &&
-                        !compatNoticeShown &&
-                        !compatNoticeDismissed &&
-                        !showCompatNoticeDialog &&
-                        !readiness.needsGuidance &&
-                        !appUpdateState.checking &&
-                        appUpdateState.available == null &&
-                        runtimeCheck.checked &&
-                        !runtimeCheck.checking &&
-                        (!fullUpdatePending || runtimePromptDismissed)
-                ) {
-                    delay(300)
-                    if (hangarActive && !onSubPage && !showProvision && !isAppLocked) {
-                        showCompatNoticeDialog = true
-                    }
-                }
-            }
-
-            if (showCompatNoticeDialog && !oobeVisible) {
-                val uriHandler = LocalUriHandler.current
-                var dontAskAgain by remember { mutableStateOf(false) }
-                AlertDialog(
-                    onDismissRequest = {
-                        showCompatNoticeDialog = false
-                        compatNoticeDismissed = true
-                        if (dontAskAgain) {
-                            scope.launch { appSettings.setCompatNoticeShown(true) }
-                        }
-                    },
-                    title = { Text(stringResource(R.string.compat_notice_title)) },
-                    text = {
-                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Text(stringResource(R.string.compat_notice_message))
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier =
-                                    Modifier.fillMaxWidth()
-                                        .toggleable(
-                                            value = dontAskAgain,
-                                            role = Role.Checkbox,
-                                            onValueChange = { dontAskAgain = it },
-                                        )
-                                        .padding(vertical = 4.dp),
-                            ) {
-                                Checkbox(
-                                    checked = dontAskAgain,
-                                    onCheckedChange = null,
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = stringResource(R.string.compat_notice_dont_ask_again),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                )
-                            }
-                        }
-                    },
-                    confirmButton = {
-                        TextButton(
-                            onClick = {
-                                showCompatNoticeDialog = false
-                                compatNoticeDismissed = true
-                                scope.launch { appSettings.setCompatNoticeShown(true) }
-                                uriHandler.openUri(ProjectLinks.ISSUE_DEVICE_SUPPORT)
-                            }
-                        ) {
-                            Text(stringResource(R.string.compat_notice_go))
-                        }
-                    },
-                    dismissButton = {
-                        TextButton(
-                            onClick = {
-                                showCompatNoticeDialog = false
-                                compatNoticeDismissed = true
-                                if (dontAskAgain) {
-                                    scope.launch { appSettings.setCompatNoticeShown(true) }
-                                }
-                            }
-                        ) {
-                            Text(stringResource(R.string.compat_notice_later))
-                        }
-                    },
-                )
-            }
-
             /**
              * 选择平级页面并关闭根详情栈；只组合目标与退场页面，不经过中间 Tab。
              *
@@ -880,9 +767,6 @@ fun AppRoot(
                                 onBack = { navigator.pop() },
                                 onOpenOobe = { showOobePreview = true },
                             )
-                        }
-                        entry<AppRoute.DeviceReport>(swipeDismiss = swipeDismiss) {
-                            DeviceReportSettingsPage(onBack = { navigator.pop() })
                         }
                         entry<AppRoute.Licenses>(swipeDismiss = swipeDismiss) {
                             OpenSourceLicensesPage(

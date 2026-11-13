@@ -136,11 +136,6 @@ enum class SettingsSection(val route: AppRoute, val titleRes: Int, val descRes: 
     Widget(AppRoute.Widget, R.string.settings_cat_widget, R.string.settings_cat_widget_desc),
     Runtime(AppRoute.Runtime, R.string.settings_cat_runtime, R.string.settings_cat_runtime_desc),
     Ocr(AppRoute.Ocr, R.string.ocr_title, R.string.ocr_description),
-    DeviceReport(
-        AppRoute.DeviceReport,
-        R.string.device_report_title,
-        R.string.device_report_description,
-    ),
     About(AppRoute.About, R.string.settings_cat_about, R.string.settings_cat_about_desc),
     ;
 
@@ -156,7 +151,6 @@ enum class SettingsSection(val route: AppRoute, val titleRes: Int, val descRes: 
             Widget -> Icons.Outlined.Widgets
             Runtime -> Icons.Outlined.Terminal
             Ocr -> Icons.Outlined.DocumentScanner
-            DeviceReport -> Icons.Outlined.PermDeviceInformation
             About -> Icons.Outlined.Info
         }
 }
@@ -248,14 +242,6 @@ fun SettingsScreen(
                             description = stringResource(R.string.settings_feedback_bug_desc),
                             onClick = { uriHandler.openUri(ProjectLinks.ISSUES) },
                             icon = Icons.Outlined.BugReport,
-                        )
-                    }
-                    item {
-                        AppNavigationRow(
-                            label = stringResource(R.string.settings_feedback_group),
-                            description = stringResource(R.string.settings_feedback_group_desc),
-                            onClick = { uriHandler.openUri(ProjectLinks.QQ_FEEDBACK_GROUP) },
-                            icon = Icons.Outlined.Forum,
                         )
                     }
                     if (onOpenOobe != null) {
