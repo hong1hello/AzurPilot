@@ -42,6 +42,53 @@ UPDATE_REPO_KEY = 'azurpilot_update_repo'
 OVERRIDE_REPO_ENV = 'AZURPILOT_ANDROID_SOURCE_REPO'
 OVERRIDE_BRANCH_ENV = 'AZURPILOT_ANDROID_SOURCE_BRANCH'
 
+MAX_REPOSITORY_LENGTH = 300
+MAX_BRANCH_LENGTH = 80
+
+
+def normalize_repository(value):
+    """校验更新源地址；不合法返回空串，由调用方按"未配置"处理。
+
+    这两个值最终会进 ``git ls-remote`` 的实参位置。Git 会把以 ``-`` 开头的实参当选项，
+    ``ls-remote`` 支持 ``--upload-pack=<exec>``，因此未经校验的字符串等于一条命令执行
+    通路。这里只做结构性拦截，不强制是 URL——本地路径与 ssh 形态在测试与工具链里合法，
+    但不放行空白、控制字符、前导 ``-`` 与 ``..``。
+
+    Validates an update-source address; returns an empty string for anything invalid.
+
+    The value ends up in an argument position of ``git ls-remote``. Git parses arguments
+    beginning with ``-`` as options, and ``ls-remote`` accepts ``--upload-pack=<exec>``, so an
+    unvalidated string is effectively a command-execution path. It does not require a URL
+    (local paths and ssh forms are legal for tests and tooling); it only blocks whitespace,
+    control characters, a leading ``-`` and ``..``.
+    """
+    text = (value or '').strip()
+    if not text or len(text) > MAX_REPOSITORY_LENGTH:
+        return ''
+    if any(character.isspace() or not character.isprintable() for character in text):
+        return ''
+    # Git 把 "-" 开头的实参当选项（ls-remote 的 --upload-pack 可执行命令），
+    # ".." 则可能被解释成上级目录，两者都不放行。
+    if text.startswith('-') or '..' in text:
+        return ''
+    return text
+
+
+def normalize_branch(value):
+    """校验分支名；不合法返回空串，由调用方回退到默认分支。
+
+    同样是为了不让 ``refs/heads/`` 后面的那一段被当成选项或路径穿越。
+
+    Validates a branch name; returns an empty string for anything invalid, so the segment
+    after ``refs/heads/`` can never become an option or a traversal.
+    """
+    text = (value or '').strip()
+    if not text or len(text) > MAX_BRANCH_LENGTH:
+        return ''
+    if text.startswith(('/', '-')) or '..' in text:
+        return ''
+    return text if all(character.isalnum() or character in '._/-' for character in text) else ''
+
 
 def write_json(path, value):
     """原子保存更新状态或恢复日志。 / Atomically saves update state or the recovery journal."""
@@ -171,6 +218,34 @@ def build_frontend(module, root):
         shutil.rmtree(temporary, ignore_errors=True)
 
 
+def verify_candidate(root, candidate, timeout=300):
+    """换目录之前，用现有解释器把新源码的入口模块跑一遍导入。
+
+    热更不能装依赖，所以「新分支要了新依赖」这类问题只有在换过去之后才会暴露，
+    表现是 WebUI 起不来、状态却写着 updated。在候选目录里先导入一次，把这种失败
+    挡在挂起任务与换目录之前：此时正式目录一字未动，回滚成本为零。
+
+    Imports the candidate's entry modules with the current interpreter before switching.
+
+    A hot update cannot install dependencies, so a branch needing a new one would only show
+    up as a dead WebUI while the state file claims "updated". Importing first moves that
+    failure in front of the suspend/swap steps, where the live tree is still untouched.
+    """
+    python = Path(root) / '.venv/bin/python'
+    if not python.exists():
+        return
+    result = subprocess.run(
+        [str(python), '-c', 'import module.api.app, deploy.frontend'],
+        cwd=candidate, capture_output=True, text=True, encoding='utf-8', errors='replace',
+        timeout=timeout,
+        env={**os.environ, 'AZURPILOT_ANDROID': '1', 'PYTHONDONTWRITEBYTECODE': '1'},
+    )
+    if result.returncode != 0:
+        lines = (result.stderr or result.stdout or '').strip().splitlines()
+        detail = lines[-1] if lines else 'unknown import error'
+        raise RuntimeError(f'新源码导入失败，已放弃切换：{detail[-300:]}')
+
+
 def patch_frontend(module):
     """为新镜像接入本地构建，旧镜像保留上游路径。 / Adds local builds while keeping legacy behavior."""
     original = module.ensure_frontend
@@ -215,10 +290,10 @@ def patch_service(module):
             branch resolves the same way: override > ``azurpilot_branch`` > ``dev``.
             """
             manifest = module.frontend_deploy.android_manifest(self.root)
-            repository = (os.environ.get(OVERRIDE_REPO_ENV, '').strip()
-                          or str(manifest.get(UPDATE_REPO_KEY) or '').strip())
-            branch = (os.environ.get(OVERRIDE_BRANCH_ENV, '').strip()
-                      or str(manifest.get('azurpilot_branch') or '').strip()
+            repository = (normalize_repository(os.environ.get(OVERRIDE_REPO_ENV, ''))
+                          or normalize_repository(str(manifest.get(UPDATE_REPO_KEY) or '')))
+            branch = (normalize_branch(os.environ.get(OVERRIDE_BRANCH_ENV, ''))
+                      or normalize_branch(str(manifest.get('azurpilot_branch') or ''))
                       or 'dev')
             return ([repository] if repository else []), branch
 
@@ -341,6 +416,9 @@ def patch_service(module):
                 # install packages over the network; the manifest still records the real hash.
                 self._phase('dist')
                 build_frontend(module.frontend_deploy, candidate)
+                # 事后体检的前置版：新源码必须能在现有解释器里导入。放在挂起任务之前，
+                # 失败时正式目录还没动过，不会出现「状态说更新成功、实际起不来」。
+                verify_candidate(self.root, candidate)
                 from module.runtime.process_manager import ProcessManager
                 names = [instance.config_name + '\n' for instance in ProcessManager.running_instances()]
                 mark_dependency_sync_pending()
