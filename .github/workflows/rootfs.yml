@@ -65,6 +65,7 @@ jobs:
       version_name: ${{ steps.resolve.outputs.version_name }}
       app_commit: ${{ steps.resolve.outputs.app_commit }}
       report_ready: ${{ steps.resolve.outputs.report_ready }}
+      cnb_ready: ${{ steps.resolve.outputs.cnb_ready }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -81,6 +82,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           REPORT_CERT_BASE64: ${{ secrets.AZURPILOT_DEVICE_REPORT_CERT_BASE64 }}
           REPORT_KEY_BASE64: ${{ secrets.AZURPILOT_DEVICE_REPORT_KEY_BASE64 }}
+          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
           SIGNING_KEY: ${{ secrets.AZURPILOT_ANDROID_KEYSTORE_BASE64 }}
           SIGNING_PASSWORD: ${{ secrets.AZURPILOT_ANDROID_KEYSTORE_PASSWORD }}
           SIGNING_ALIAS: ${{ secrets.AZURPILOT_ANDROID_KEY_ALIAS }}
@@ -103,6 +105,13 @@ jobs:
           # missing, fall back to shipping no credentials instead of failing the build.
           report_ready=false
           if [[ -n "$REPORT_CERT_BASE64" && -n "$REPORT_KEY_BASE64" ]]; then report_ready=true; fi
+          # CNB 镜像是可选的国内加速，需要 cnb.cool 的 repo-release:rw token；fork 上通常没有，
+          # 缺了就跳过该步骤，别让整轮发布因为镜像失败变红（Release 已经发出去了）。
+          # The CNB mirror is an optional domestic accelerator and needs a repo-release:rw
+          # token from cnb.cool. Forks usually lack it, so skip the step instead of failing
+          # the whole publish job after the GitHub Release has already shipped.
+          cnb_ready=false
+          if [[ -n "$CNB_TOKEN" ]]; then cnb_ready=true; fi
           publish=false
           if [[ "$EVENT_NAME" == push || "$INPUT_PUBLISH" == true ]]; then publish=true; fi
           signing_ready=false
@@ -185,6 +194,7 @@ jobs:
           echo "upstream_repo=$source_repo" >> "$GITHUB_OUTPUT"
           echo "upstream_branch=$source_branch" >> "$GITHUB_OUTPUT"
           echo "report_ready=$report_ready" >> "$GITHUB_OUTPUT"
+          echo "cnb_ready=$cnb_ready" >> "$GITHUB_OUTPUT"
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
           echo "signing_ready=$signing_ready" >> "$GITHUB_OUTPUT"
           echo "should_build=$should_build" >> "$GITHUB_OUTPUT"
@@ -702,7 +712,7 @@ jobs:
             fi
           done
       - name: Mirror verified GitHub artifacts to CNB Releases
-        if: ${{ needs.resolve.outputs.signing_ready == 'true' }}
+        if: ${{ needs.resolve.outputs.signing_ready == 'true' && needs.resolve.outputs.cnb_ready == 'true' }}
         env:
           CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
           HOST_SHA: ${{ github.sha }}
