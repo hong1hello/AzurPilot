@@ -5,7 +5,6 @@ import android.view.KeyEvent
 import com.azurpilot.ghio.bridge.InputControlUtils
 import com.azurpilot.ghio.constant.WakeUnlockResult
 import com.azurpilot.ghio.third.Ln
-import com.azurpilot.ghio.third.wrappers.DisplayPower
 import com.azurpilot.ghio.third.wrappers.ServiceManager
 
 /**
@@ -100,14 +99,6 @@ object WakeUnlockController {
             return WakeUnlockResult.LOCK_FAILED
         }
 
-        // 面板级关屏优先：只黑屏、不进系统休眠，远程侧的画面采集与后台任务不受影响。
-        // 拿不到 display token（老 ROM 或权限不足）时才退回系统级 goToSleep。
-        if (DisplayPower.setPower(false)) {
-            pollUntil(SCREEN_OFF_TIMEOUT_MS) { DisplayPower.isOff() }
-            Ln.i("$TAG: keyguard locked, panel blanked without sleeping the system")
-            return WakeUnlockResult.OK
-        }
-        Ln.w("$TAG: display power control unavailable, falling back to goToSleep")
         if (!pm.goToSleep()) {
             Ln.w("$TAG: goToSleep unavailable (keyguard already locked)")
             return WakeUnlockResult.OK
@@ -145,12 +136,6 @@ object WakeUnlockController {
                 Ln.w("$TAG: screen did not turn on within ${SCREEN_ON_TIMEOUT_MS}ms")
                 return WakeUnlockResult.WAKE_FAILED
             }
-        }
-
-        // 面板被本进程关掉时系统仍认为亮着，上面那条 wakeUp 分支不会触发，需单独恢复。
-        if (DisplayPower.isOff()) {
-            DisplayPower.setPower(true)
-            Ln.i("$TAG: panel restored before unlock")
         }
 
         val locked = wm.isKeyguardLocked()
