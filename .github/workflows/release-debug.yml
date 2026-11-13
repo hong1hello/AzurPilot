@@ -1,0 +1,135 @@
+name: Publish APKs to a Release
+
+# 把某次构建的 APK artifact 直接发到本仓库 Releases。
+#
+# 动机：构建产物约 3.4 GB。经由受限网络把它拉到本机再上传，既慢又容易中断；
+# 在 runner 上直接取同一仓库的 artifact 只在机房内部传输，几秒完成。
+#
+# 与 rootfs.yml 的 publish 作业互不干扰：本作业发布到独立的 tag，
+# 不会碰应用内更新通道读取的 azurpilot-android-latest。
+#
+# Publishes one build's APK artifact to this repository's Releases.
+#
+# Motivation: the artifact is ~3.4 GB; pulling it down to a constrained network and
+# pushing it back is slow and fragile. Fetching a same-repository artifact on a runner
+# stays inside the datacenter and finishes in seconds.
+#
+# It never touches azurpilot-android-latest, so the in-app update channel is unaffected.
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Build run ID to publish; blank uses the latest successful "AzurPilot for Android build"
+        required: false
+        type: string
+      tag:
+        description: Release tag; blank derives android-debug-<short sha of that run>
+        required: false
+        type: string
+      prerelease:
+        description: Mark the release as a pre-release
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Resolve the source run
+        id: resolve
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_RUN_ID: ${{ inputs.run_id }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          run_id="${INPUT_RUN_ID:-}"
+          if [[ -z "$run_id" ]]; then
+            run_id="$(gh run list --repo "$GITHUB_REPOSITORY" \
+              --workflow rootfs.yml --status success --limit 1 \
+              --json databaseId --jq '.[0].databaseId')"
+          fi
+          [[ "$run_id" =~ ^[0-9]+$ ]] || { echo "无法确定构建 run id: $run_id" >&2; exit 1; }
+          meta="$(gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --json headSha,conclusion,displayTitle)"
+          conclusion="$(printf '%s' "$meta" | jq -r '.conclusion')"
+          [[ "$conclusion" == "success" ]] || { echo "run $run_id 结论为 $conclusion，只发布成功的构建" >&2; exit 1; }
+          head_sha="$(printf '%s' "$meta" | jq -r '.headSha')"
+          short="${head_sha:0:7}"
+          tag="${INPUT_TAG:-android-debug-$short}"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "发布 run $run_id（$short）到 tag $tag"
+
+      - name: Download the APK artifact
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ steps.resolve.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" -n azurpilot-android-apk -D dist
+          ls -lh dist
+          # 至少要有 arm64 完整包，否则发布没有意义。
+          test -f dist/azurpilot-full-arm64-v8a.apk || { echo '缺少 azurpilot-full-arm64-v8a.apk' >&2; exit 1; }
+
+      - name: Fingerprint the artifacts
+        env:
+          HEAD_SHA: ${{ steps.resolve.outputs.head_sha }}
+          RUN_ID: ${{ steps.resolve.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum *.apk > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          {
+            echo "# 构建信息"
+            echo
+            echo "- 构建 run: [$RUN_ID](https://github.com/$GITHUB_REPOSITORY/actions/runs/$RUN_ID)"
+            echo "- 源码提交: \`$HEAD_SHA\`"
+            echo "- 产物时间: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo
+            echo "## 安装说明"
+            echo
+            echo "1. 本包为 **debug 签名**，与官方 release 签名不同。安装前请先卸载旧版，否则会报签名冲突。"
+            echo "2. 手机装 \`azurpilot-full-arm64-v8a.apk\`（内置 rootfs，开箱即用）。"
+            echo "3. \`azurpilot-update*.apk\` 为轻量包，需已有 Runtime 才能用。"
+            echo
+            echo "## 校验"
+            echo
+            echo '```'
+            cat SHA256SUMS.txt
+            echo '```'
+          } > ../NOTES.md
+
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+          RUN_ID: ${{ steps.resolve.outputs.run_id }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release $TAG 已存在，改为补传资产"
+            gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            args=(--repo "$GITHUB_REPOSITORY" --title "AzurPilot Android $TAG" --notes-file NOTES.md)
+            # 不能写成 `[[ ... ]] && args+=(...)`：条件为假时整条复合命令返回 1，
+            # 在 set -e 下会直接终止脚本。
+            # Do not write `[[ ... ]] && args+=(...)`: a false test makes the compound
+            # command return 1, which terminates the script under set -e.
+            if [[ "$PRERELEASE" == "true" ]]; then
+              args+=(--prerelease)
+            fi
+            gh release create "$TAG" dist/* "${args[@]}"
+          fi
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json url,assets \
+            --jq '"发布地址: " + .url, (.assets[] | "  " + .name + "  " + (.size|tostring) + " bytes")'
