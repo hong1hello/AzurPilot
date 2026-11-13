@@ -28,8 +28,8 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WORK_DIR="${WORK_DIR:-$REPO_ROOT/.tmp/azurpilot-build}"
 ROOTFS_DIR="$WORK_DIR/rootfs"
 DIST_DIR="${DIST_DIR:-$REPO_ROOT/dist}"
-SOURCE_REPO="${AZURPILOT_REPO:-https://github.com/wess09/AzurPilot.git}"
-SOURCE_BRANCH="${AZURPILOT_BRANCH:-dev}"
+SOURCE_REPO="${AZURPILOT_REPO:-https://github.com/hong1hello/zurPilot.git}"
+SOURCE_BRANCH="${AZURPILOT_BRANCH:-master}"
 # 设备端热更只认这个地址，不再把官方源换成 CNB；缺省与构建来源一致。
 # The device hot-update reads only this address; the official-to-CNB rewrite is gone,
 # and it defaults to the build source when unset.

@@ -324,14 +324,14 @@ def patch_service(module):
             ``azurpilot_update_repo``. When neither exists an empty list is returned so the
             caller can either fail the apply or surface "update source not configured"
             instead of disguising a missing configuration as "already up to date". The
-            branch resolves the same way: override > ``azurpilot_branch`` > ``dev``.
+            branch resolves the same way: override > ``azurpilot_branch`` > ``master``.
             """
             manifest = module.frontend_deploy.android_manifest(self.root)
             repository = (normalize_repository(os.environ.get(OVERRIDE_REPO_ENV, ''))
                           or normalize_repository(str(manifest.get(UPDATE_REPO_KEY) or '')))
             branch = (normalize_branch(os.environ.get(OVERRIDE_BRANCH_ENV, ''))
                       or normalize_branch(str(manifest.get('azurpilot_branch') or ''))
-                      or 'dev')
+                      or 'master')
             return ([repository] if repository else []), branch
 
         def upstream_head(self, force=False):

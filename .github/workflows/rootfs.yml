@@ -10,11 +10,11 @@ on:
         required: false
         type: string
       azurpilot_repo:
-        description: AzurPilot source repository; blank uses the official wess09/AzurPilot
+        description: AzurPilot source repository; blank uses hong1hello/zurPilot
         required: false
         type: string
       azurpilot_branch:
-        description: AzurPilot source branch; blank uses dev
+        description: AzurPilot source branch; blank uses master
         required: false
         type: string
       reuse_rootfs_run_id:
@@ -91,11 +91,14 @@ jobs:
         run: |
           set -euo pipefail
           ref="${INPUT_REF:-}"
-          # 源码仓库/分支可由 dispatch 覆盖，留空沿用官方源；fork 无需改文件即可构建别家的代码。
-          # The source repository and branch can be overridden per dispatch; blanks keep the
-          # official source so a fork can build someone else's code without editing files.
-          source_repo="${INPUT_REPO:-https://github.com/wess09/AzurPilot.git}"
-          source_branch="${INPUT_BRANCH:-dev}"
+          # 源码仓库/分支可由 dispatch 覆盖，留空沿用本 fork 的隐私源
+          # （hong1hello/zurPilot@master，已关闭云端上传与遥测）。热更源跟随同一个值，
+          # 所以裸构建不可能悄悄回到上游代码。
+          # The source repository and branch can be overridden per dispatch; blanks keep this
+          # fork's privacy source (hong1hello/zurPilot@master). The device hot-update source
+          # follows the same value, so a plain build cannot silently pull upstream code.
+          source_repo="${INPUT_REPO:-https://github.com/hong1hello/zurPilot.git}"
+          source_branch="${INPUT_BRANCH:-master}"
           if [[ -z "$ref" ]]; then
             ref="$(git ls-remote "$source_repo" "refs/heads/$source_branch" | awk '{print $1}')"
           fi
