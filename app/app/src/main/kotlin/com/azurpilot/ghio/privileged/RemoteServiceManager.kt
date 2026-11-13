@@ -297,16 +297,38 @@ object RemoteServiceManager : PrivilegedServicePort {
      * connector callbacks.
      */
     override fun bind() {
-        val backend = RemoteAccessCoordinator.refresh().configuredBackend
+        var backend = RemoteAccessCoordinator.refresh().configuredBackend
         if (!RemoteAccessCoordinator.isGranted(backend)) {
-            val exception = IllegalStateException("${backend.display} permission not granted")
-            ServiceBootLogger.event("BIND_DENIED", "backend=$backend not granted")
-            Timber.w(exception)
-            synchronized(lock) {
-                boundBackend = null
-                _state.value = ServiceState.Error(exception)
+            // 配置为 Shizuku、但内置 ADB 未配对且外部 Shizuku 没在跑时，若设备已经给过 root
+            // 授权，就直接改走 Root 通道。虚拟屏、截图、触控都依赖特权进程；没有它，首页只能
+            // 显示「无法正常创建运行画面」，用户会以为是程序坏了。
+            //
+            // 只在「另一个后端**已授权**」时才回退：这里刻意不用 isAvailable()，避免为了探测
+            // 可用性弹出 su 授权框——用户没点过的东西不该被自动拉起。
+            //
+            // When Shizuku is configured but neither the embedded ADB pairing nor an external
+            // Shizuku is live, fall back to Root if that backend is already granted. The virtual
+            // display, capture and input all need the privileged process; without it the home
+            // page can only say "cannot create the run screen", which reads like a broken app.
+            //
+            // Only an **already granted** backend is used: isAvailable() is deliberately not
+            // consulted here, so nothing pops an su prompt the user never asked for.
+            val fallback = listOf(RemoteBackend.SHIZUKU, RemoteBackend.ROOT)
+                .firstOrNull { it != backend && RemoteAccessCoordinator.isGranted(it) }
+            if (fallback != null) {
+                ServiceBootLogger.event("BIND_FALLBACK", "backend=$backend not granted, using $fallback")
+                Timber.i("Privileged backend %s not granted; falling back to %s", backend, fallback)
+                backend = fallback
+            } else {
+                val exception = IllegalStateException("${backend.display} permission not granted")
+                ServiceBootLogger.event("BIND_DENIED", "backend=$backend not granted")
+                Timber.w(exception)
+                synchronized(lock) {
+                    boundBackend = null
+                    _state.value = ServiceState.Error(exception)
+                }
+                return
             }
-            return
         }
 
         val attempt: Int
