@@ -115,12 +115,41 @@ def tools_ready(root):
 
 
 def git(root, *args, timeout=900):
-    """限时执行 Git，失败时保留诊断输出。 / Runs bounded Git commands with failure diagnostics."""
-    result = subprocess.run(
-        ['git', '-c', 'http.lowSpeedLimit=1024', '-c', 'http.lowSpeedTime=30', *args],
-        cwd=root, check=True, capture_output=True, text=True, encoding='utf-8', errors='replace',
-        timeout=timeout, env={**os.environ, 'GIT_TERMINAL_PROMPT': '0'},
-    )
+    """限时执行 Git，失败时把 stderr 一并抛出去。
+
+    原来直接让 ``CalledProcessError`` 冒到状态里，界面只能看到
+    ``Command '[...]' returned non-zero exit status 128.`` —— 128 只是「git 失败」的
+    统称，真正的 DNS / TLS / 权限原因全在 stderr 里，于是用户和日志都停在无信息的一句话上。
+    这里把 stderr 尾部与常见成因的提示拼进异常文本。
+
+    Runs bounded Git commands and folds stderr into the raised error.
+
+    Letting ``CalledProcessError`` escape gave the UI nothing but
+    ``... returned non-zero exit status 128.`` — 128 is git's catch-all failure code and the
+    actual DNS/TLS/permission reason only lives in stderr. The tail and a cause hint are
+    appended here so the state file and the log carry something actionable.
+    """
+    try:
+        result = subprocess.run(
+            ['git', '-c', 'http.lowSpeedLimit=1024', '-c', 'http.lowSpeedTime=30', *args],
+            cwd=root, check=True, capture_output=True, text=True, encoding='utf-8', errors='replace',
+            timeout=timeout, env={**os.environ, 'GIT_TERMINAL_PROMPT': '0'},
+        )
+    except subprocess.CalledProcessError as error:
+        detail = ((error.stderr or '') or (error.stdout or '')).strip()
+        tail = detail.splitlines()[-3:] if detail else []
+        summary = ' / '.join(line.strip() for line in tail)[-400:] or 'git 无输出'
+        hint = ''
+        lowered = detail.lower()
+        if 'could not resolve host' in lowered or 'name or service not known' in lowered:
+            hint = '（容器内 DNS 解析失败：手机网络到不了 GitHub，检查是否需要全局代理）'
+        elif 'ssl' in lowered or 'certificate' in lowered:
+            hint = '（TLS 失败：可能是中间人代理或容器缺少 CA 证书）'
+        elif 'authentication failed' in lowered or 'not found' in lowered or 'could not read username' in lowered:
+            hint = '（仓库不可读：地址写错，或该仓库是私有的）'
+        elif 'timed out' in lowered or 'timeout' in lowered:
+            hint = '（连接超时：网络不通或被限速）'
+        raise RuntimeError(f'git {args[0]} 失败：{summary}{hint}') from error
     return result.stdout.strip()
 
 
