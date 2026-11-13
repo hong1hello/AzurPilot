@@ -664,6 +664,7 @@
     <string name="device_report_duplicate">この報告は送信済みです。既存の記録を確認できます。</string>
     <string name="device_report_open_issue">送信内容を確認</string>
     <string name="device_report_unavailable">このビルドには有効な送信証明書がありません。アプリを更新して再試行してください。</string>
+    <string name="device_report_disabled">このビルドでは機種レポートの送信を無効にしています。どのサーバーにもデータを送信しません。</string>
     <string name="device_report_auth_error">送信の認証に失敗しました。端末の時刻を確認するか、アプリを更新してください。</string>
     <string name="device_report_rate_limited">送信が多すぎます。1 時間後に再試行してください。</string>
     <string name="device_report_server_error">サーバーが混雑しています。後で再試行してください。同じ情報は既存の Issue を使います。</string>

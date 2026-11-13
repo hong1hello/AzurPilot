@@ -4,6 +4,7 @@ import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import com.azurpilot.ghio.report.ReportGate
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
@@ -68,6 +69,7 @@ class RemotePairings(context: Context) {
 
     /** 通过六码或扫描内容领取一次性配对。 / Claims a one-time pairing using six digits or scanned data. */
     suspend fun pair(input: String): RemotePairing = withContext(Dispatchers.IO) {
+        require(ReportGate.REMOTE_PAIRING_ENABLED) { "远程配对注册已在本构建中禁用" }
         val value = input.trim()
         val request = if (value.matches(Regex("[0-9]{6}"))) Claim(value) else {
             require(value.matches(Regex("[a-f0-9]{32}")))

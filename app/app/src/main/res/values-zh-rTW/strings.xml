@@ -664,6 +664,7 @@
     <string name="device_report_duplicate">這份報告已提交過，可直接查看已有記錄。</string>
     <string name="device_report_open_issue">查看提交內容</string>
     <string name="device_report_unavailable">此安裝包未設定提交憑證，或憑證已過期。請更新 App 後重試。</string>
+    <string name="device_report_disabled">本建置已停用機型上報，不會向任何伺服器傳送資料。</string>
     <string name="device_report_auth_error">提交驗證失敗。請檢查系統時間，或更新 App 後重試。</string>
     <string name="device_report_rate_limited">提交較多，請一小時後再試。</string>
     <string name="device_report_server_error">伺服器暫時忙碌，請稍後重試。重複提交會沿用已有工單。</string>

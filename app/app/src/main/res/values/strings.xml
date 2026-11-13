@@ -673,6 +673,7 @@
     <string name="device_report_duplicate">这份报告已提交过，可直接查看已有记录。</string>
     <string name="device_report_open_issue">查看提交内容</string>
     <string name="device_report_unavailable">此安装包未配置提交证书，或证书已过期。请更新 App 后重试。</string>
+    <string name="device_report_disabled">本构建已禁用机型上报，不会向任何服务器发送数据。</string>
     <string name="device_report_auth_error">提交验证失败。请检查系统时间，或更新 App 后重试。</string>
     <string name="device_report_rate_limited">提交较多，请一小时后再试。</string>
     <string name="device_report_server_error">服务器暂时繁忙，请稍后重试。重复提交会复用已有工单。</string>
