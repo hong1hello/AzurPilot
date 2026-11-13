@@ -473,13 +473,26 @@ class AppSettingsManager(private val context: Context) : AppSettingsGateway {
     /** 写入自定义源码仓库；空串恢复为清单内置地址 / Writes the custom source repository. */
     suspend fun setAzurpilotSourceRepo(repository: String): Unit =
         with(AppSettingsSchema) {
-            context.dataStore.edit { it[azurpilotSourceRepo] = repository.trim() }
+            // 与运行时侧（android_update.normalize_repository）同一套规则：只放行干净的
+            // http(s) 地址。该值最终落到 git 的实参位，以 "-" 开头会被 Git 当成选项
+            // （ls-remote 的 --upload-pack 可执行命令），所以非法值一律按「留空」处理，
+            // 交给构建清单里的地址兜底。
+            val value = repository.trim().takeIf {
+                it.length in 1..300 &&
+                    (it.startsWith("https://") || it.startsWith("http://")) &&
+                    it.none(Char::isWhitespace) && !it.startsWith("-") && !it.contains("..")
+            }.orEmpty()
+            context.dataStore.edit { it[azurpilotSourceRepo] = value }
         }
 
     /** 写入自定义源码分支；空串恢复为清单内置分支 / Writes the custom source branch. */
     suspend fun setAzurpilotSourceBranch(branch: String): Unit =
         with(AppSettingsSchema) {
-            context.dataStore.edit { it[azurpilotSourceBranch] = branch.trim() }
+            // 分支名会拼进 refs/heads/<branch>：拒绝前导 - 与 .. 是防止它变成选项或路径穿越。
+            val value = branch.trim()
+                .takeIf { it.matches(Regex("[A-Za-z0-9._/-]{1,80}")) && !it.startsWith("/") && !it.startsWith("-") && !it.contains("..") }
+                .orEmpty()
+            context.dataStore.edit { it[azurpilotSourceBranch] = value }
         }
 
     /**
