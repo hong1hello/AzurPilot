@@ -18,6 +18,7 @@ import androidx.lifecycle.setViewTreeViewModelStoreOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.azurpilot.ghio.domain.RunMode
 import com.azurpilot.ghio.overlay.OverlayViewModelOwner
+import com.azurpilot.ghio.privileged.PrivilegedServicePort
 import com.azurpilot.ghio.proot.AzurPilotRepository
 import com.azurpilot.ghio.proot.AzurPilotRunController
 import com.azurpilot.ghio.service.HostState
@@ -41,21 +42,31 @@ import java.lang.ref.WeakReference
  * 后台模式的环境期屏保
  *
  * 仅 [RunMode.BACKGROUND] 下工作：用一块全黑悬浮层压住屏幕
- * （TYPE_APPLICATION_OVERLAY，需 SYSTEM_ALERT_WINDOW），保屏保亮度双管齐下，
- * 让后台挂机看起来像熄屏。独立全屏宿主隐藏系统栏，避免导航按钮常亮。
+ * （TYPE_APPLICATION_OVERLAY，需 SYSTEM_ALERT_WINDOW）挡住触摸，再让特权进程把
+ * 物理屏面板的电源模式设成 OFF——面板级关屏不进系统休眠，后台任务与虚拟屏采集
+ * 照常跑，所以这次是真熄屏而不是装作熄屏。独立全屏宿主隐藏系统栏，避免导航按钮常亮。
  * 挂载与移除都在主线程；[setup] 后自观察运行模式
  * 与环境态；自动进入跟随调度器或工具启动，任务或环境停止时收起。
+ *
+ * 特权连接不可用、或 ROM 拿不到 display token 时，面板关不掉，此时退化成改动前的
+ * 行为：全黑遮罩 + 保屏点亮，用户看到的仍是黑屏，只是没有真正省电。
  *
  * The screensaver shown over the environment while in background mode.
  *
  * Works in [RunMode.BACKGROUND] only: a full-black
  * overlay layer (TYPE_APPLICATION_OVERLAY, requires SYSTEM_ALERT_WINDOW)
- * covers the screen, pairing keep-screen-on with configured low brightness so
- * background idle looks like the screen is off. A separate immersive host hides system bars so
+ * covers the screen to catch touches, and the privileged process then sets the
+ * physical panel's power mode to OFF — blanking at the panel level does not suspend the
+ * system, so background tasks and virtual-display capture keep running. This is a real
+ * screen-off rather than a pretend one. A separate immersive host hides system bars so
  * navigation buttons do not stay illuminated. Mount and removal happen on
  * the main thread; after [setup] the manager observes the run mode and the
  * environment state. Automatic entry follows scheduler or tool startup, and stopping the run or
  * environment dismisses the overlay.
+ *
+ * When the privileged connection or a display token is unavailable the panel cannot be
+ * blanked, so it degrades to the previous behavior: the black overlay with the screen kept
+ * lit. The user still sees black, only without the actual power saving.
  */
 class ScreenSaverOverlayManager(
     private val context: Context,
@@ -63,6 +74,7 @@ class ScreenSaverOverlayManager(
     private val appSettings: AppSettingsGateway,
     private val runController: AzurPilotRunController,
     private val repository: AzurPilotRepository,
+    private val privileged: PrivilegedServicePort,
 ) {
 
     private val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
@@ -170,6 +182,8 @@ class ScreenSaverOverlayManager(
                 composeView = view
                 viewModelOwner.start()
                 _isShowing.value = true
+                // 遮罩就位后立刻关面板：黑遮罩负责挡触摸与防误触，面板级断电负责真正省电。
+                requestDisplayPower(false)
                 // 后台启动全屏宿主前先让悬浮窗实际可见，满足系统的后台启动条件。
                 view.doOnPreDraw {
                     view.post {
@@ -232,12 +246,19 @@ class ScreenSaverOverlayManager(
      * are only logged.
      */
     suspend fun hide() = withContext(Dispatchers.Main.immediate) {
-        val view = composeView ?: return@withContext
+        val view = composeView
+        if (view == null) {
+            // 遮罩没挂上也可能已经关了面板（宿主启动超时那一路），这里补一次恢复。
+            requestDisplayPower(true)
+            return@withContext
+        }
         runCatching { windowManager.removeView(view) }
             .onSuccess {
                 view.disposeComposition()
                 composeView = null
                 _isShowing.value = false
+                // 面板是特权进程设的，与本地窗口生命周期无关，拆完窗口再恢复即可。
+                requestDisplayPower(true)
                 hostReady?.complete(false)
                 hostReady = null
                 immersiveHost.get()?.finish()
@@ -246,6 +267,29 @@ class ScreenSaverOverlayManager(
                 Timber.d("Screen saver dismissed")
             }
             .onFailure { Timber.e(it, "Failed to remove screen saver") }
+    }
+
+    /**
+     * 请求特权进程开关物理屏面板；失败只记日志、不影响遮罩
+     *
+     * 面板级关屏（SurfaceFlinger 的 POWER_MODE_OFF）不进系统休眠，所以后台任务、
+     * 虚拟屏采集与定时器都照常跑，这正是「息屏运行」要的效果。特权连接不可用、
+     * 或 ROM 拿不到 display token 时，退化成改动前的全黑遮罩，用户看到的仍是黑屏。
+     *
+     * Asks the privileged process to switch the physical panel; failures are only logged.
+     *
+     * Blanking at the SurfaceFlinger level (POWER_MODE_OFF) does not suspend the system, so
+     * background tasks, virtual-display capture and timers keep running — the whole point of
+     * "run with the screen off". When the privileged connection or a display token is
+     * unavailable this degrades to the previous all-black overlay.
+     */
+    private fun requestDisplayPower(on: Boolean) {
+        scope.launch {
+            // 跨进程 binder 调用放到 IO，别占主线程一帧。
+            runCatching {
+                withContext(Dispatchers.IO) { privileged.useService { it.setDisplayPower(on) } }
+            }.onFailure { Timber.w(it, "Display power request failed (on=%s)", on) }
+        }
     }
 
     /**
@@ -282,14 +326,19 @@ class ScreenSaverOverlayManager(
 
     /**
      * 悬浮层不可聚焦，避免抢走全屏宿主的系统栏控制权；按键由宿主与系统处理。
-     * KEEP_SCREEN_ON + 用户配置的低亮度是这层的核心——真息屏会让
-     * 后台运行中断，所以只能保持点亮装作熄屏
+     *
+     * KEEP_SCREEN_ON 必须留着：面板的 OFF 是 SurfaceFlinger 层设的，系统自己仍认为屏幕
+     * 亮着；一旦让系统超时休眠，就会走回 goToSleep 那条老路（Doze、进程冻结、
+     * 虚拟屏帧停滞），等于白改。低亮度保留只为面板恢复的瞬间不刺眼。
      *
      * The overlay cannot take focus away from the immersive host's system-bar controls;
      * the host and system handle hardware keys.
-     * KEEP_SCREEN_ON plus the configured low screenBrightness is the core of this
-     * layer — a real screen-off would interrupt the background run, so the
-     * display is kept lit and merely dressed as off.
+     *
+     * KEEP_SCREEN_ON must stay: the panel's OFF state is set at the SurfaceFlinger level,
+     * while the system still believes the screen is on. Letting the system time out would
+     * fall back to the old goToSleep path (Doze, frozen processes, stalled virtual-display
+     * frames) and defeat the change. The low brightness only avoids a flash when the panel
+     * comes back.
      */
     private fun createLayoutParams(): WindowManager.LayoutParams {
         @Suppress("DEPRECATION")
