@@ -17,7 +17,7 @@
 # 依赖关系 / Dependency mapping:
 #   libproot.so        <- Termux proot: usr/bin/proot (NEEDED libtalloc.so.2 -> libtalloc.so)
 #   libproot-loader.so <- Termux proot: usr/libexec/proot/loader (static ELF guest launcher)
-#   libtalloc.so       <- libtalloc: usr/lib/libtalloc.so.2.4.3
+#   libtalloc.so       <- libtalloc: usr/lib/libtalloc.so.2.5.0
 #   libandroid-shmem.so / libandroid-selinux.so / libpcre2-8.so <- same-named packages, renamed
 #   libbusybox.so      <- busybox: usr/bin/busybox (NEEDED -> libbusybox_app.so)
 #   libbusybox_app.so  <- busybox: usr/lib/libbusybox.so.1.38.0 (applet payload; SONAME unchanged)
@@ -34,8 +34,8 @@ POOL="https://packages.termux.dev/apt/termux-main/pool/main"
 # Package-name_version maps to a path under data.tar's data/data/com.termux/files/usr. SHA-256
 # pins a verified snapshot; upgrades must update the source, hash, and ELF plan below together.
 PKGS=(
-    "proot_5.1.107.95_x86_64.deb|f63ce9bd0d38715eae0163a3772f3395913587444c7ce7232091c6d359afe3c3"
-    "libtalloc_2.4.3_x86_64.deb|7ca2eaae2e53b28228a01301bc410b62845403d6317c25b8e0a7f40681de0628"
+    "proot_5.1.107.102_x86_64.deb|2497064226c15971be8131c7facead94a06c225347796326a383c832dca57758"
+    "libtalloc_2.5.0_x86_64.deb|b8c6d95f20075dc1f9ec6573575b2444e8d526e48e0d8d6d5cf4e071e6e06530"
     "libandroid-shmem_0.7_x86_64.deb|ffa9e4c87467b158b148d0ff92dda796aa038276c2075af3269cdcdb06f25797"
     "libandroid-selinux_14.0.0.11-1_x86_64.deb|99cf96556683ddb53f7d645ca1720e10523c4796ce5b41c583da9f89a47679ce"
     "pcre2_10.49_x86_64.deb|4a6f66ac12565342897ce9b5cd11ba8ce6fce1fd1a91ae679c3468d7fc2ee541"
@@ -71,7 +71,14 @@ for entry in "${PKGS[@]}"; do
         # do not silently guess a fallback URL or a mirror-layout change could hide an error.
         prefix_dir="${name:0:4}"
         [[ $name == lib* ]] || prefix_dir="${name:0:1}"
-        curl -fsL --retry 3 "$POOL/$prefix_dir/$name/$deb" -o "$target"
+        # Termux 会滚动删除旧版本 deb，404 时给出可操作的提示，而不是只留 curl 退出码 22。
+        # Termux rotates old deb versions away; on 404 explain the cause instead of a bare
+        # curl exit code 22.
+        curl -fsL --retry 3 "$POOL/$prefix_dir/$name/$deb" -o "$target" || {
+            echo "下载失败：$POOL/$prefix_dir/$name/$deb" >&2
+            echo "Termux 可能已删除该版本；用 project/upstream-switch/check_termux_pkgs.py 查现行版本后，同步更新 PKGS/PLAN 与 SHA-256。" >&2
+            exit 1
+        }
         actual="$(sha256sum "$target" | awk '{print $1}')"
         [[ "$actual" == "$sha" ]] || { echo "$deb SHA256 mismatch: $actual" >&2; exit 1; }
     fi
@@ -106,10 +113,10 @@ PREFIX = './data/data/com.termux/files/usr/'
 # (deb, source path, output name, [(old NEEDED name, new NEEDED name)]). A replacement may not be
 # longer than the original because this script cannot relocate ELF dynamic-string-table offsets.
 PLAN = [
-    ('proot_5.1.107.95_x86_64.deb', 'bin/proot', 'libproot.so',
+    ('proot_5.1.107.102_x86_64.deb', 'bin/proot', 'libproot.so',
      [('libtalloc.so.2', 'libtalloc.so')]),
-    ('proot_5.1.107.95_x86_64.deb', 'libexec/proot/loader', 'libproot-loader.so', []),
-    ('libtalloc_2.4.3_x86_64.deb', 'lib/libtalloc.so.2.4.3', 'libtalloc.so', []),
+    ('proot_5.1.107.102_x86_64.deb', 'libexec/proot/loader', 'libproot-loader.so', []),
+    ('libtalloc_2.5.0_x86_64.deb', 'lib/libtalloc.so.2.5.0', 'libtalloc.so', []),
     ('libandroid-shmem_0.7_x86_64.deb', 'lib/libandroid-shmem.so', 'libandroid-shmem.so', []),
     ('libandroid-selinux_14.0.0.11-1_x86_64.deb', 'lib/libandroid-selinux.so', 'libandroid-selinux.so', []),
     ('pcre2_10.49_x86_64.deb', 'lib/libpcre2-8.so', 'libpcre2-8.so', []),
