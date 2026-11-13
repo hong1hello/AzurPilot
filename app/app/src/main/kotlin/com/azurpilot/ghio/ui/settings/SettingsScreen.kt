@@ -1046,7 +1046,7 @@ fun AboutSettingsPage(
             add(
                 com.azurpilot.ghio.ui.ksu.screen.about.LinkInfo(
                     stringResource(R.string.settings_about_repository),
-                    "https://github.com/wess09/AzurPilot-for-Android",
+                    "https://github.com/hong1hello/AzurPilot",
                     icon = Icons.Outlined.Code,
                 )
             )
