@@ -325,6 +325,8 @@
     <string name="settings_source_repo">ソースリポジトリ</string>
     <string name="settings_source_repo_desc">ホットアップデートはこのアドレスからのみ AzurPilot のソースを取得します。空欄の場合は Runtime に組み込まれたアドレスを使用します。変更は Runtime の再起動後に有効になります。同梱の依存セットと異なるカスタムブランチの動作保証は利用者の責任です。</string>
     <string name="settings_source_repo_hint">カスタムソースリポジトリ（例：https://github.com/you/AzurPilot.git）</string>
+    <string name="settings_source_repo_preset_build">ビルドマニフェストに従う</string>
+    <string name="settings_source_repo_preset_zurpilot">hong1hello/zurPilot</string>
     <string name="settings_source_branch_hint">ブランチ（空欄は組み込みブランチ）</string>
     <string name="settings_runtime_check">Runtime の更新を確認</string>
     <string name="settings_runtime_checking">Runtime を確認中…</string>

@@ -1575,6 +1575,25 @@ fun RuntimeSettingsPage(
                 remember(azurpilotSourceRepo) { mutableStateOf(azurpilotSourceRepo) }
             var branchDraft by
                 remember(azurpilotSourceBranch) { mutableStateOf(azurpilotSourceBranch) }
+            // 预置来源：一键填好仓库与分支，用户仍可改成任意地址。
+            // 刻意不做成「默认就指向第三方」：内置运行时若不是用该仓库构建的，uv.lock
+            // 校验会拒绝热更（依赖集不同），默认指向只会让每次检查都报错。
+            TextButton(
+                onClick = {
+                    repoDraft = ""
+                    branchDraft = ""
+                },
+            ) {
+                Text(stringResource(R.string.settings_source_repo_preset_build))
+            }
+            TextButton(
+                onClick = {
+                    repoDraft = "https://github.com/hong1hello/zurPilot"
+                    branchDraft = "privacy/local-only"
+                },
+            ) {
+                Text(stringResource(R.string.settings_source_repo_preset_zurpilot))
+            }
             OutlinedTextField(
                 value = repoDraft,
                 onValueChange = { repoDraft = it },

@@ -325,6 +325,8 @@
     <string name="settings_source_repo">原始碼倉庫</string>
     <string name="settings_source_repo_desc">熱更只從此位址拉取 AzurPilot 原始碼。留空則沿用 Runtime 內建位址；修改後需重啟 Runtime 生效。與內建依賴集不一致的自訂分支請自行負責可執行性。</string>
     <string name="settings_source_repo_hint">自訂原始碼倉庫，如 https://github.com/you/AzurPilot.git</string>
+    <string name="settings_source_repo_preset_build">跟隨建置清單</string>
+    <string name="settings_source_repo_preset_zurpilot">hong1hello/zurPilot</string>
     <string name="settings_source_branch_hint">分支（留空沿用內建分支）</string>
     <string name="settings_runtime_check">檢查 Runtime 更新</string>
     <string name="settings_runtime_checking">正在檢查 Runtime…</string>

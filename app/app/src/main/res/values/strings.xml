@@ -332,6 +332,8 @@
     <string name="settings_source_repo">源码仓库</string>
     <string name="settings_source_repo_desc">热更只从该地址拉取 AzurPilot 源码。留空则沿用 Runtime 内置地址；修改后需重启 Runtime 生效。与内置依赖集不一致的自定义分支由你自行负责可运行性。</string>
     <string name="settings_source_repo_hint">自定义源码仓库，如 https://github.com/you/AzurPilot.git</string>
+    <string name="settings_source_repo_preset_build">跟随构建清单</string>
+    <string name="settings_source_repo_preset_zurpilot">hong1hello/zurPilot</string>
     <string name="settings_source_branch_hint">分支（留空沿用内置分支）</string>
     <string name="settings_runtime_check">检查 Runtime 更新</string>
     <string name="settings_runtime_checking">正在检查 Runtime…</string>

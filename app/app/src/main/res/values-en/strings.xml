@@ -332,6 +332,8 @@
     <string name="settings_source_repo">Source repository</string>
     <string name="settings_source_repo_desc">Hot updates fetch AzurPilot source only from this address. Leave it empty to keep the address built into the Runtime; restart the Runtime to apply changes. A custom branch that diverges from the bundled dependency set is your responsibility to keep runnable.</string>
     <string name="settings_source_repo_hint">Custom source repository, e.g. https://github.com/you/AzurPilot.git</string>
+    <string name="settings_source_repo_preset_build">Follow build manifest</string>
+    <string name="settings_source_repo_preset_zurpilot">hong1hello/zurPilot</string>
     <string name="settings_source_branch_hint">Branch (empty keeps the built-in branch)</string>
     <string name="settings_runtime_check">Check Runtime update</string>
     <string name="settings_runtime_checking">Checking Runtime…</string>
