@@ -23,7 +23,6 @@ import com.azurpilot.ghio.remote.internal.displayLifecycleLock
 import com.azurpilot.ghio.remote.internal.WakeUnlockController
 import com.azurpilot.ghio.third.FakeContext
 import com.azurpilot.ghio.third.Ln
-import com.azurpilot.ghio.third.wrappers.DisplayPower
 import com.azurpilot.ghio.third.wrappers.ServiceManager
 import com.azurpilot.ghio.third.Workarounds
 import android.view.Surface
@@ -139,20 +138,6 @@ class RemoteServiceImpl : RemoteService.Stub() {
 
     /** 上锁并息屏 / Locks the keyguard and puts the screen to sleep */
     override fun lockAndSleep(): Int = WakeUnlockController.lockAndSleep()
-
-    /**
-     * 物理屏面板开关：只黑屏、不进系统休眠
-     *
-     * 与 [lockAndSleep] 的分工：[lockAndSleep] 连 keyguard 一起锁（远程访问解锁用），
-     * 这里只动面板，用于「息屏运行」——后台任务与虚拟屏采集要继续跑，不能被休眠打断。
-     *
-     * Physical panel switch: blanks the display without suspending the system.
-     *
-     * Division of labor with [lockAndSleep]: that one also locks the keyguard (for remote
-     * access unlock), while this one only touches the panel, for "run with the screen off"
-     * where background tasks and virtual-display capture must keep running.
-     */
-    override fun setDisplayPower(on: Boolean): Boolean = DisplayPower.setPower(on)
 
     /**
      * 主屏是否亮着；读取失败宽松返回 true，不拦后续动作
