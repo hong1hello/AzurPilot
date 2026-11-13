@@ -34,6 +34,7 @@ val overlayModule = module {
             appSettings = get(),
             runController = get(),
             repository = get(),
+            privileged = get(),
         )
     }
 }

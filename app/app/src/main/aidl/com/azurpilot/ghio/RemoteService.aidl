@@ -339,4 +339,14 @@ interface RemoteService {
      * not pass through Binder or TCP.
      */
     void openSharedFrameChannel(in ParcelFileDescriptor connection) = 78;
+
+    /**
+     * 开关物理屏面板电源：`false` 只黑屏、不进入系统休眠，后台任务与虚拟屏采集不受影响；
+     * `true` 恢复点亮。返回是否至少在一个显示器上生效。
+     *
+     * Turns the physical panel's power on or off. `false` only blanks the panel without
+     * suspending the system, so background tasks and virtual-display capture keep running;
+     * `true` restores it. Returns whether at least one display took the change.
+     */
+    boolean setDisplayPower(boolean on) = 79;
 }
