@@ -9,7 +9,6 @@ on:
       - 'rootfs/build/build-azurpilot.sh'
       - 'app/app/build.gradle.kts'
       - 'app/app/src/main/kotlin/com/azurpilot/ghio/proot/ProotHost.kt'
-      - '.github/azurpilot-upstream.txt'
       - '.github/workflows/ntp-tests.yml'
   push:
     branches: [main, fix/android-ntp-background-sync]
@@ -17,7 +16,6 @@ on:
       - 'rootfs/**'
       - 'app/app/build.gradle.kts'
       - 'app/app/src/main/kotlin/com/azurpilot/ghio/proot/ProotHost.kt'
-      - '.github/azurpilot-upstream.txt'
       - '.github/workflows/ntp-tests.yml'
 
 permissions:
