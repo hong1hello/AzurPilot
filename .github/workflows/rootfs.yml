@@ -99,6 +99,25 @@ jobs:
           # follows the same value, so a plain build cannot silently pull upstream code.
           source_repo="${INPUT_REPO:-https://github.com/hong1hello/zurPilot.git}"
           source_branch="${INPUT_BRANCH:-master}"
+          # 只允许从本 fork 的隐私核心构建：官方 wess09/AzurPilot 含云端上传与遥测，
+          # 任何情况下都不应进入 APK。dispatch 传入其他地址一律拒绝，且校验发生在
+          # 任何网络访问（git ls-remote）之前。
+          # Only this fork's privacy core may be built: the official wess09/AzurPilot
+          # carries cloud upload and telemetry and must never end up in an APK. Any
+          # other dispatch-supplied repository is rejected before any network access.
+          allowed_source=false
+          for candidate in \
+            https://github.com/hong1hello/zurPilot \
+            https://github.com/hong1hello/zurPilot.git \
+            git@github.com:hong1hello/zurPilot \
+            git@github.com:hong1hello/zurPilot.git \
+            hong1hello/zurPilot; do
+            if [[ "$source_repo" == "$candidate" ]]; then allowed_source=true; fi
+          done
+          if [[ "$allowed_source" != true ]]; then
+            echo "::error::refusing AzurPilot source repository '$source_repo'; only hong1hello/zurPilot is allowed"
+            exit 1
+          fi
           if [[ -z "$ref" ]]; then
             ref="$(git ls-remote "$source_repo" "refs/heads/$source_branch" | awk '{print $1}')"
           fi

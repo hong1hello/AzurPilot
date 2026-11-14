@@ -28,15 +28,18 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - id: core
-        run: echo "ref=$(cat .github/azurpilot-upstream.txt)" >> "$GITHUB_OUTPUT"
+      # 核心夹具只从本 fork 的隐私源取，与 rootfs.yml 的默认构建源保持一致：
+      # 官方 wess09/AzurPilot 含云端上传与遥测，不得被任何 CI 环节检出。
+      # The core fixture comes only from this fork's privacy source, matching
+      # rootfs.yml's default build source: the official wess09/AzurPilot carries
+      # cloud upload and telemetry and must never be checked out anywhere in CI.
       - uses: actions/checkout@v4
         with:
-          repository: wess09/AzurPilot
-          ref: ${{ steps.core.outputs.ref }}
+          repository: hong1hello/zurPilot
+          ref: master
           path: upstream-core
           sparse-checkout: module/config
-      - name: Test NTP against pinned core
+      - name: Test NTP against privacy core
         env:
           AZURPILOT_SOURCE: ${{ github.workspace }}/upstream-core
         run: python3 rootfs/tests/test_android_ntp.py -v
