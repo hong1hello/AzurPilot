@@ -374,4 +374,30 @@ interface RemoteService {
      * strings are easier to read in logs.
      */
     String[] profileDisplays() = 82;
+
+    /**
+     * 向**指定** displayId 注入单指按下（多屏用）
+     *
+     * 与 `touchDown` 的区别：老的三个方法固定作用于「当前虚拟屏」，多屏时必然串屏。
+     * 这里显式传 displayId，服务侧只接受本进程管理的虚拟屏；传 0（物理屏）或任何
+     * 非托管 id 都会被丢弃，避免误把点击打到真实屏幕上。
+     *
+     * 主屏模式（PRIMARY）下同样忽略，与老方法一致。
+     *
+     * Injects a single-pointer down event into the given display (multi-display).
+     *
+     * Unlike the legacy `touchDown`, which always targets "the current virtual display" and
+     * therefore crosses displays once more than one exists, this takes an explicit displayId.
+     * The service only accepts displays it manages here: 0 (the physical display) or any
+     * unmanaged id is dropped so a tap can never land on the real screen.
+     *
+     * PRIMARY mode is ignored as well, matching the legacy behaviour.
+     */
+    oneway void touchDownAt(int displayId, int x, int y) = 83;
+
+    /** 向指定 displayId 注入单指移动 / Injects a single-pointer move into the given display. */
+    oneway void touchMoveAt(int displayId, int x, int y) = 84;
+
+    /** 向指定 displayId 注入单指抬起 / Injects a single-pointer up into the given display. */
+    oneway void touchUpAt(int displayId, int x, int y) = 85;
 }

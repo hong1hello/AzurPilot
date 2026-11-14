@@ -372,6 +372,63 @@ class RemoteServiceImpl : RemoteService.Stub() {
     /** 预览上的手动注入；仅虚拟屏模式生效 / Manual injection for the preview; effective only in virtual display mode */
     override fun touchUp(x: Int, y: Int) = withVirtualDisplay { InputControlUtils.up(x, y, 0, it) }
 
+    /**
+     * 向指定虚拟屏注入触摸（多屏用）
+     *
+     * 老方法（`touchDown/Move/Up`）作用于「当前虚拟屏」，多屏并行时必然串屏，所以这里
+     * 显式带 displayId。落点前会校验该 id 确实属于本进程管理的会话：
+     *
+     * - `DISPLAY_NONE`（-1）与 0（物理屏）直接丢弃——宁可吞掉一次点击，也不能把注入
+     *   打到用户真正的屏幕上
+     * - 任何不是当前会话持有的 id 也丢弃：屏可能已被别处停掉，此时再注入等于对着
+     *   已销毁的 display 发事件，静默无效还会让上层以为手势生效了
+     *
+     * Injects touch into the given display (multi-display).
+     *
+     * The legacy calls target "the current virtual display" and cross displays once more than
+     * one exists, so this takes an explicit displayId. Before dispatching, the id must belong to
+     * a session this process manages:
+     *
+     * - `DISPLAY_NONE` (-1) and 0 (the physical display) are dropped: swallowing one tap is far
+     *   better than injecting into the user's real screen
+     * - ids no longer held by a session are dropped too, because injecting into a destroyed
+     *   display silently does nothing while the caller believes the gesture landed
+     */
+    override fun touchDownAt(displayId: Int, x: Int, y: Int) =
+        withManagedDisplay(displayId) { InputControlUtils.down(x, y, 0, it) }
+
+    /** 向指定虚拟屏注入移动 / Injects a move into the given display. */
+    override fun touchMoveAt(displayId: Int, x: Int, y: Int) =
+        withManagedDisplay(displayId) { InputControlUtils.move(x, y, 0, it) }
+
+    /** 向指定虚拟屏注入抬起 / Injects an up into the given display. */
+    override fun touchUpAt(displayId: Int, x: Int, y: Int) =
+        withManagedDisplay(displayId) { InputControlUtils.up(x, y, 0, it) }
+
+    /**
+     * 只在 displayId 属于受管会话时执行动作
+     *
+     * 主屏模式不接管输入，与老路径一致。校验顺序按「最便宜的判断」排：先挡模式，
+     * 再挡非正数，最后才去查会话表。
+     *
+     * Runs the action only when displayId belongs to a managed session.
+     *
+     * PRIMARY mode does not intercept input, matching the legacy path. Checks go from cheapest
+     * to most expensive: mode first, then non-positive ids, then the session table.
+     */
+    private inline fun withManagedDisplay(displayId: Int, action: (Int) -> Unit) {
+        if (virtualDisplayMode.get() == DisplayMode.PRIMARY) return
+        // 0 是物理屏、-1 是哨兵；两者都不该接收注入
+        if (displayId <= 0) return
+        val managed = VirtualDisplayManager.sessionProfiles()
+            .any { VirtualDisplayManager.sessionDisplayId(it) == displayId }
+        if (!managed) {
+            Ln.w("touchAt ignored: displayId=$displayId is not a managed virtual display")
+            return
+        }
+        action(displayId)
+    }
+
     /** 主屏模式不接管输入；无虚拟屏时静默丢弃 / Input is not intercepted in PRIMARY mode; silently dropped with no virtual display */
     private inline fun withVirtualDisplay(action: (Int) -> Unit) {
         if (virtualDisplayMode.get() == DisplayMode.PRIMARY) return
