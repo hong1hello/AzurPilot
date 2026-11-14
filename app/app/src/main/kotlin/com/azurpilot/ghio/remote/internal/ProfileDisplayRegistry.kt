@@ -2,127 +2,118 @@ package com.azurpilot.ghio.remote.internal
 
 import com.azurpilot.ghio.constant.DefaultDisplayConfig
 import com.azurpilot.ghio.third.Ln
-import java.util.concurrent.ConcurrentHashMap
 
 /**
- * 配置档案 → 虚拟屏的绑定表（P0 骨架）
+ * 配置档案 → 虚拟屏的策略层
  *
- * 目前 [VirtualDisplayManager] 仍是「一个 object 持有一块屏」的实现，所以这张表
- * **只允许一个 profile 持屏**：第二个 profile 请求时返回
- * [DefaultDisplayConfig.DISPLAY_NONE]，让调用方拿到明确的「暂不支持」而不是一个
- * 会和别人抢焦点的 displayId。把「能挂多块」和「假装能挂多块」分开，是这一步的
- * 全部意义——多实例改造（每块屏独立采集面、独立生命周期）另行进行。
+ * 生命周期本身在 [VirtualDisplayManager] 的会话里，这里只负责三件事：
+ * 1. 把 profile 名规范化（空串落到默认档案）
+ * 2. 给调用方一个「不会拿到已销毁 id」的查询：displayId 为 [DefaultDisplayConfig.DISPLAY_NONE]
+ *    或会话已不存在时一律当未绑定
+ * 3. 输出 `profile:displayId` 快照，供 App 侧渲染绑定关系
  *
- * profile 一旦持屏就固定绑定，不允许在运行中改绑：改绑意味着输入要从一块屏挪到
- * 另一块，正在操作的手指会落到错误的窗口上。
+ * 为什么还要这一层：AIDL 的契约是按 profile 提问，而 [VirtualDisplayManager] 既要服务
+ * 老的单屏调用方、又要按 profile 建会话。把「名字规范化 + 失效判定」集中在一处，
+ * 免得每个调用点各写一遍。
  *
- * Profile → virtual display binding (P0 skeleton).
+ * Policy layer over profile → display.
  *
- * [VirtualDisplayManager] still owns a single display, so this table allows exactly one
- * profile to hold it: a second profile receives [DefaultDisplayConfig.DISPLAY_NONE] instead
- * of an id that would fight over focus. Keeping "cannot do multi yet" separate from
- * "pretends to" is the whole point of this step; the real multi-instance refactor (own
- * capture surface and lifecycle per display) comes later.
+ * The lifecycle lives in [VirtualDisplayManager]'s sessions; this only normalizes profile
+ * names, answers "is it really alive" queries (a stale id is treated as unbound), and emits the
+ * `profile:displayId` snapshot the app renders.
  *
- * A binding is fixed once created: rebinding at runtime would move input from one display
- * to another under the user's finger, landing taps in the wrong window.
+ * Why the layer exists: the AIDL contract asks per profile, while
+ * [VirtualDisplayManager] must also keep serving legacy single-display callers. Normalization
+ * and staleness checks live here so no call site has to repeat them.
  */
 object ProfileDisplayRegistry {
 
     private const val TAG = "ProfileDisplay"
 
-    /** 默认档案名；未指定 profile 的旧调用方落到这里 / Profile name used by legacy callers. */
-    const val DEFAULT_PROFILE = "default"
-
-    private val bindings = ConcurrentHashMap<String, Int>()
+    /** 默认档案名；未指定 profile 的旧调用方落到这里 / Profile used by legacy callers. */
+    const val DEFAULT_PROFILE = VirtualDisplayManager.DEFAULT_PROFILE
 
     /**
      * 为 profile 创建（或复用）虚拟屏
      *
      * @param profileId 配置档案名；空串按 [DEFAULT_PROFILE] 处理
-     * @return 该 profile 的 displayId，失败或已有其它 profile 持屏时返回 `DISPLAY_NONE`
-     *
-     * @throws IllegalStateException 当底层创建抛出异常时（由 [start] 转成 `DISPLAY_NONE`）
+     * @param width 帧宽；<=0 用默认值
+     * @param height 帧高；<=0 用默认值
+     * @param dpi 密度；0 跟随设备
+     * @return 该 profile 的 displayId，失败为 [DefaultDisplayConfig.DISPLAY_NONE]
      */
-    fun startProfileDisplay(profileId: String): Int = synchronized(this) {
-        val id = profileId.ifBlank { DEFAULT_PROFILE }
-        existing(id)?.let { return it }
-
-        val holder = bindings.entries.firstOrNull()
-        if (holder != null) {
-            // 单屏实现下的硬约束：宁可明确失败，也不要返回一个抢焦点的 id
-            Ln.w("$TAG: $id 请求持屏被拒，$holder 仍持有单块虚拟屏（多屏尚未实现）")
-            return DefaultDisplayConfig.DISPLAY_NONE
-        }
-
-        val displayId = runCatching { VirtualDisplayManager.start() }
-            .onFailure { Ln.e("$TAG: 为 $id 创建虚拟屏失败", it) }
-            .getOrDefault(DefaultDisplayConfig.DISPLAY_NONE)
+    fun startProfileDisplay(
+        profileId: String,
+        width: Int = 0,
+        height: Int = 0,
+        dpi: Int = 0,
+    ): Int {
+        val id = normalize(profileId)
+        val displayId = VirtualDisplayManager.startSession(id, width, height, dpi)
         if (displayId == DefaultDisplayConfig.DISPLAY_NONE) {
-            Ln.w("$TAG: $id 创建虚拟屏返回 DISPLAY_NONE")
-            return DefaultDisplayConfig.DISPLAY_NONE
+            Ln.w("$TAG: $id 建屏失败（会话数已达上限或底层创建失败）")
+        } else {
+            Ln.i("$TAG: $id 绑定 displayId=$displayId，推流=${VirtualDisplayManager.isStreaming(id)}")
         }
-        bindings[id] = displayId
-        Ln.i("$TAG: $id 绑定 displayId=$displayId")
         return displayId
     }
 
-    /**
-     * 停止 profile 的虚拟屏并解绑
-     *
-     * 只有持有者才真正停屏；其它 profile 调用是 no-op。停屏走
-     * [VirtualDisplayManager.stop]，它自己保证幂等。
-     */
+    /** 停止 profile 的虚拟屏并解绑 / Stops and unbinds the profile's display. */
     fun stopProfileDisplay(profileId: String) {
-        val id = profileId.ifBlank { DEFAULT_PROFILE }
-        synchronized(this) {
-            val owned = bindings[id] ?: return
-            bindings.remove(id)
-            runCatching { VirtualDisplayManager.stop() }
-                .onFailure { Ln.w("$TAG: 停止 $id 的虚拟屏失败") }
-            Ln.i("$TAG: $id 释放 displayId=$owned")
-        }
+        val id = normalize(profileId)
+        VirtualDisplayManager.stopSession(id)
+        Ln.i("$TAG: $id 已释放")
     }
 
-    /** 查询 profile 的 displayId；未持屏返回 `DISPLAY_NONE`。 */
-    fun displayIdFor(profileId: String): Int =
-        existing(profileId.ifBlank { DEFAULT_PROFILE }) ?: DefaultDisplayConfig.DISPLAY_NONE
+    /**
+     * 查询 profile 的 displayId；未持屏或已销毁返回 [DefaultDisplayConfig.DISPLAY_NONE]
+     *
+     * 会话被别处停掉（例如 UI 的「停止环境」直接调 `VirtualDisplayManager.stop()`）时，
+     * 这里返回 NONE 而不是历史 id，避免调用方把输入注入到已销毁的屏上。
+     *
+     * Display id for the profile, or [DefaultDisplayConfig.DISPLAY_NONE] when absent/destroyed.
+     *
+     * When the display was stopped elsewhere, returning the historical id would send input to a
+     * destroyed display, so it degrades to NONE.
+     */
+    fun displayIdFor(profileId: String): Int {
+        val id = normalize(profileId)
+        val displayId = VirtualDisplayManager.sessionDisplayId(id)
+        return if (displayId == DefaultDisplayConfig.DISPLAY_NONE) {
+            DefaultDisplayConfig.DISPLAY_NONE
+        } else {
+            displayId
+        }
+    }
 
     /**
      * 导出 `profileId:displayId` 列表，供 App 侧渲染绑定关系
      *
-     * 用字符串数组而不是 Map：跨 Binder 时不需要额外的泛型声明，日志里也可读。
+     * 用字符串数组而不是 Map：跨 Binder 时不需要额外泛型声明，日志里也可读。
+     *
+     * Bound profiles as `profileId:displayId` entries.
+     *
+     * A string array instead of a Map keeps the Binder signature flat and the log readable.
      */
     fun snapshot(): Array<String> =
-        bindings.entries.sortedBy { it.key }.map { "${it.key}:${it.value}" }.toTypedArray()
+        VirtualDisplayManager.sessionProfiles()
+            .mapNotNull { profile ->
+                val displayId = VirtualDisplayManager.sessionDisplayId(profile)
+                if (displayId == DefaultDisplayConfig.DISPLAY_NONE) null
+                else "$profile:$displayId"
+            }
+            .toTypedArray()
 
-    /** 特权进程重启后清理残留绑定 / Clears stale bindings after the privileged process restarts. */
+    /** profile 是否正在推流 / Whether the profile is currently streamed. */
+    fun isStreaming(profileId: String): Boolean =
+        VirtualDisplayManager.isStreaming(normalize(profileId))
+
+    /** 特权进程重启后清空绑定 / Clears bindings after the privileged process restarts. */
     fun reset() {
-        synchronized(this) {
-            bindings.clear()
-        }
+        VirtualDisplayManager.stopAll()
     }
 
-    /**
-     * 已绑定则返回 id，但要求底层显示仍然存活
-     *
-     * 底层可能被别处停掉（例如 UI 里的「停止环境」直接调了
-     * `VirtualDisplayManager.stop()`），此时表里还留着旧 id，必须当作未绑定处理，
-     * 否则调用方会拿到一个已经销毁的 displayId。
-     *
-     * Returns the bound id only while the underlying display is still alive.
-     *
-     * The display can be stopped elsewhere (the environment's stop path calls
-     * `VirtualDisplayManager.stop()` directly), leaving a stale id here; treating it as
-     * unbound keeps callers from receiving a destroyed displayId.
-     */
-    private fun existing(profileId: String): Int? {
-        val bound = bindings[profileId] ?: return null
-        if (VirtualDisplayManager.getDisplayId() != bound) {
-            bindings.remove(profileId)
-            Ln.w("$TAG: $profileId 的 displayId=$bound 已失效，清除绑定")
-            return null
-        }
-        return bound
-    }
+    /** 空串落到默认档案；其余原样保留（profile 名由 AzurPilot 配置决定） / Blank falls back to the default profile. */
+    private fun normalize(profileId: String): String =
+        profileId.trim().ifBlank { DEFAULT_PROFILE }
 }
