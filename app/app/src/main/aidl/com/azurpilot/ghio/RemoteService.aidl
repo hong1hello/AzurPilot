@@ -339,4 +339,39 @@ interface RemoteService {
      * not pass through Binder or TCP.
      */
     void openSharedFrameChannel(in ParcelFileDescriptor connection) = 78;
+
+    /**
+     * 为指定配置档案创建虚拟屏，返回 displayId；失败返回 `DISPLAY_NONE`。
+     *
+     * 同一 profile 重复调用返回既有 displayId，不重建。当前实现只支持一块虚拟屏：
+     * 已有其它 profile 持屏时返回 `DISPLAY_NONE`，调用方据此提示「暂不支持多屏」，
+     * 而不是拿到一个看起来正常却互相抢焦点的 id。
+     *
+     * Creates the virtual display for a profile and returns its displayId, or
+     * `DISPLAY_NONE` on failure.
+     *
+     * Repeated calls for the same profile return the existing id. The current implementation
+     * carries a single virtual display: when another profile already owns it, the call
+     * returns `DISPLAY_NONE` so callers can say "multi-display unsupported" instead of
+     * receiving an id that would fight over focus.
+     */
+    int startProfileDisplay(String profileId) = 79;
+
+    /** 停止指定 profile 的虚拟屏；未知 profile 或未持屏时忽略。 / Stops the profile's display; no-op for unknown profiles. */
+    void stopProfileDisplay(String profileId) = 80;
+
+    /** 查询 profile 当前的 displayId；未持屏返回 `DISPLAY_NONE`。 / Current displayId for the profile, `DISPLAY_NONE` when none. */
+    int profileDisplayId(String profileId) = 81;
+
+    /**
+     * 已绑定的 profile 列表，每项形如 `profileId:displayId`。
+     *
+     * 用字符串数组而不是 Map：AIDL 的 Map 需要额外的泛型声明，字符串对调试也更直观。
+     *
+     * Bound profiles as `profileId:displayId` entries.
+     *
+     * A string array instead of a Map: AIDL maps need extra generic declarations and the
+     * strings are easier to read in logs.
+     */
+    String[] profileDisplays() = 82;
 }

@@ -14,6 +14,7 @@ import com.azurpilot.ghio.remote.internal.SharedFrameServer
 import com.azurpilot.ghio.remote.internal.PermissionGrantHelper
 import com.azurpilot.ghio.service.AccessibilityHelperService
 import com.azurpilot.ghio.remote.internal.PowerController
+import com.azurpilot.ghio.remote.internal.ProfileDisplayRegistry
 import com.azurpilot.ghio.remote.internal.PrimaryDisplayManager
 import com.azurpilot.ghio.remote.internal.ScreenManager
 import com.azurpilot.ghio.remote.internal.SdkTaskRepatriator
@@ -147,6 +148,33 @@ class RemoteServiceImpl : RemoteService.Stub() {
      */
     override fun isScreenOn(): Boolean =
         runCatching { ServiceManager.getPowerManager().isScreenOn(0) }.getOrDefault(true)
+
+    /**
+     * 按配置档案创建虚拟屏，返回 displayId
+     *
+     * 当前是单屏实现：[ProfileDisplayRegistry] 只允许一个 profile 持屏，第二个会拿到
+     * `DISPLAY_NONE`。这一步先把「按 profile 要屏」的契约固定下来，App 侧据此渲染
+     * 绑定关系；真正的多实例（每块屏独立采集面与生命周期）随后落地。
+     *
+     * Creates the virtual display for a profile and returns its displayId.
+     *
+     * Single-display for now: [ProfileDisplayRegistry] lets one profile own it and hands
+     * `DISPLAY_NONE` to the next. This lands the "ask per profile" contract so the app can
+     * render bindings; true multi-instance (own capture surface per display) comes next.
+     */
+    override fun startProfileDisplay(profileId: String): Int =
+        ProfileDisplayRegistry.startProfileDisplay(profileId)
+
+    /** 释放该 profile 的虚拟屏 / Releases the profile's virtual display. */
+    override fun stopProfileDisplay(profileId: String) =
+        ProfileDisplayRegistry.stopProfileDisplay(profileId)
+
+    /** 查询该 profile 的 displayId / Display id bound to the profile. */
+    override fun profileDisplayId(profileId: String): Int =
+        ProfileDisplayRegistry.displayIdFor(profileId)
+
+    /** 当前全部绑定关系，形如 `profile:displayId` / All bindings as `profile:displayId`. */
+    override fun profileDisplays(): Array<String> = ProfileDisplayRegistry.snapshot()
 
     /**
      * 强停看门狗反推出的目标 app；从未取到目标时返回 false
