@@ -40,6 +40,14 @@ on:
           - ubuntu-24.04
           - macos-26
           - macos-15
+      abis:
+        description: Architectures to build; arm64-v8a halves build time and artifact size
+        required: false
+        default: both
+        type: choice
+        options:
+          - both
+          - arm64-v8a
 
 permissions:
   actions: read
@@ -66,6 +74,9 @@ jobs:
       app_commit: ${{ steps.resolve.outputs.app_commit }}
       report_ready: ${{ steps.resolve.outputs.report_ready }}
       cnb_ready: ${{ steps.resolve.outputs.cnb_ready }}
+      # 构建矩阵与 ABI 列表都由 dispatch 输入推导，避免矩阵与循环两处各写一份架构
+      api_matrix: ${{ steps.resolve.outputs.api_matrix }}
+      abi_list: ${{ steps.resolve.outputs.abi_list }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -79,6 +90,7 @@ jobs:
           INPUT_BRANCH: ${{ inputs.azurpilot_branch }}
           INPUT_PUBLISH: ${{ inputs.publish_update }}
           INPUT_FORCE: ${{ inputs.force }}
+          INPUT_ABIS: ${{ inputs.abis }}
           EVENT_NAME: ${{ github.event_name }}
           REPORT_CERT_BASE64: ${{ secrets.AZURPILOT_DEVICE_REPORT_CERT_BASE64 }}
           REPORT_KEY_BASE64: ${{ secrets.AZURPILOT_DEVICE_REPORT_KEY_BASE64 }}
@@ -224,6 +236,28 @@ jobs:
           echo "version_code=$version_code" >> "$GITHUB_OUTPUT"
           echo "version_name=$version_name" >> "$GITHUB_OUTPUT"
           echo "app_commit=$app_commit" >> "$GITHUB_OUTPUT"
+          # ABI 选择：默认两架构；只测真机时只建 arm64，构建时间与产物体积都省一半。
+          # 矩阵与 apk 作业的循环共用这一处输出，避免两处各写一份架构列表而走偏。
+          #
+          # ABI selection: both by default; an arm64-only run halves build time and artifact
+          # size for real-device testing. The matrix and the apk loops share this single
+          # output so the two never drift apart.
+          case "${INPUT_ABIS:-both}" in
+            arm64-v8a)
+              api_matrix='[{"abi":"arm64-v8a","runner":"ubuntu-24.04-arm"}]'
+              abi_list='arm64-v8a'
+              ;;
+            both|'')
+              api_matrix='[{"abi":"arm64-v8a","runner":"ubuntu-24.04-arm"},{"abi":"x86_64","runner":"ubuntu-24.04"}]'
+              abi_list='arm64-v8a x86_64'
+              ;;
+            *)
+              echo "Invalid abis input: ${INPUT_ABIS}" >&2
+              exit 1
+              ;;
+          esac
+          echo "api_matrix=$api_matrix" >> "$GITHUB_OUTPUT"
+          echo "abi_list=$abi_list" >> "$GITHUB_OUTPUT"
 
   build:
     needs: resolve
@@ -233,12 +267,7 @@ jobs:
     # x86_64 使用 ubuntu-24.04。
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - abi: arm64-v8a
-            runner: ubuntu-24.04-arm
-          - abi: x86_64
-            runner: ubuntu-24.04
+      matrix: ${{ fromJSON(needs.resolve.outputs.api_matrix) }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     steps:
@@ -294,6 +323,10 @@ jobs:
     # APK 编译走 x64 Linux。实测 macos-26（虚拟化 M1，3 核 / 7168MB，单核基准 7.2 Miter/s）
     # 第一次全量构建 11m34s，ubuntu-24.04 同一步约 4 分钟，慢一倍多，故默认仍是 ubuntu；
     # macos-26 / macos-15 留在 dispatch 输入里，需要时随时切。
+    # ABI 列表由 resolve 推导：apk 作业的两个循环共用它，只建 arm64 时不会去碰 x86_64 的产物
+    # ABI list comes from resolve so both apk loops agree; arm64-only runs never touch x86_64.
+    env:
+      ABI_LIST: ${{ needs.resolve.outputs.abi_list }}
     runs-on: ${{ inputs.apk_runner || 'ubuntu-24.04' }}
     timeout-minutes: 120
     steps:
@@ -311,6 +344,9 @@ jobs:
           run-id: ${{ inputs.reuse_rootfs_run_id || github.run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/download-artifact@v4
+        # 只建 arm64 时必须跳过：download-artifact 找不到同名产物会直接失败
+        # Skipped for arm64-only runs: download-artifact fails outright when the name is missing.
+        if: ${{ contains(needs.resolve.outputs.abi_list, 'x86_64') }}
         with:
           name: rootfs-x86_64
           path: .tmp/azurpilot-artifact/x86_64
@@ -429,7 +465,7 @@ jobs:
           build_variant=":app:assemble${variant^}"
 
           # ① per-arch full APK：收窄 ABI 并内置同架构 rootfs（verify 任务会核对 rootfs_arch）
-          for abi in arm64-v8a x86_64; do
+          for abi in ${ABI_LIST:-arm64-v8a x86_64}; do
             cp "../.tmp/azurpilot-artifact/$abi/rootfs.tar.xz" app/src/main/assets/rootfs/rootfs.tar.xz
             cp "../.tmp/azurpilot-artifact/$abi/BUILD_MANIFEST" app/src/main/assets/rootfs/BUILD_MANIFEST
             ./gradlew "$build_variant" -Pazurpilot.releaseAbi="$abi" "${gradle_args[@]}"
@@ -456,7 +492,7 @@ jobs:
           ./gradlew "$build_variant" -Pazurpilot.slimApk=true "${gradle_args[@]}"
           cp "app/build/outputs/apk/$variant/"*.apk ../dist/azurpilot-update.apk
           # ③ 按架构轻量包：模拟器安装通用包时可能优先选择 ARM 转译。
-          for abi in arm64-v8a x86_64; do
+          for abi in ${ABI_LIST:-arm64-v8a x86_64}; do
             ./gradlew "$build_variant" -Pazurpilot.slimApk=true -Pazurpilot.releaseAbi="$abi" "${gradle_args[@]}"
             cp "app/build/outputs/apk/$variant/"*.apk "../dist/azurpilot-update-$abi.apk"
           done
@@ -531,7 +567,7 @@ jobs:
 
   publish:
     needs: [resolve, build, apk]
-    if: ${{ always() && needs.resolve.outputs.should_build == 'true' && needs.resolve.outputs.publish == 'true' && (needs.build.result == 'success' || inputs.reuse_rootfs_run_id != '') && needs.apk.result == 'success' }}
+    if: ${{ always() && needs.resolve.outputs.should_build == 'true' && needs.resolve.outputs.publish == 'true' && needs.resolve.outputs.abi_list == 'arm64-v8a x86_64' && (needs.build.result == 'success' || inputs.reuse_rootfs_run_id != '') && needs.apk.result == 'success' }}
     runs-on: ubuntu-24.04
     concurrency:
       group: cnb-release-publish
@@ -586,7 +622,7 @@ jobs:
           fi
           # 每个架构一份发布资产与清单条目。旧版 App 只读扁平 rootfs* 字段（历史上一直是
           # arm64 包），继续指向 arm64 条目，保证旧包的运行时更新不断供。
-          for abi in arm64-v8a x86_64; do
+          for abi in ${ABI_LIST:-arm64-v8a x86_64}; do
             key="$(echo "$abi" | tr 'a-z-' 'A-Z_')"
             cp ".tmp/publish-rootfs/$abi/rootfs.tar.xz" "rootfs-$abi.tar.xz"
             cp ".tmp/publish-rootfs/$abi/BUILD_MANIFEST" "BUILD_MANIFEST-$abi.json"
