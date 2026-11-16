@@ -267,7 +267,15 @@ jobs:
     # x86_64 使用 ubuntu-24.04。
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.resolve.outputs.api_matrix) }}
+      # matrix 必须是映射，数组要塞进 include —— 直接写 `matrix: ${{ fromJSON(...) }}`
+      # 会让 GitHub 解析出一个空矩阵，于是 build 作业一个实例都不创建（表现为 apk 被 skip，
+      # 而日志里没有任何报错）。
+      #
+      # matrix must stay a mapping: the array goes under include. Assigning the array to
+      # matrix itself yields an empty matrix, so no build job is created at all — the run
+      # then shows apk as skipped with nothing in the logs.
+      matrix:
+        include: ${{ fromJSON(needs.resolve.outputs.api_matrix) }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     steps:
