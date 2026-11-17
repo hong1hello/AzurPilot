@@ -1,24 +1,41 @@
 package com.azurpilot.ghio.remoteaccess
 
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.selects.select
+import kotlinx.coroutines.suspendCancellableCoroutine
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
 import org.json.JSONObject
+import kotlinx.coroutines.CancellationException
 import java.io.IOException
 import java.net.InetAddress
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
 
 /**
- * 在 IO 调度器解析固定入口并验证客户端可达的 HTTP 地址，失败后请求 Cloudflare。
+ * 在 IO 调度器解析固定入口并验证客户端可达的 HTTP 地址，直连失败后静默尝试 P2P，再请求 Cloudflare。
  *
- * Resolves registry entries and checks HTTP reachability on the IO dispatcher,
- * requesting Cloudflare after direct candidates fail.
+ * Resolves registry entries and checks HTTP reachability on the IO dispatcher, silently trying P2P
+ * before requesting Cloudflare after direct candidates fail.
  */
-class RemoteConnections(private val client: OkHttpClient) {
+class RemoteConnections(
+    private val client: OkHttpClient,
+    private val peerConnectionFactory: Peer2PeerConnectionFactory = UnavailablePeer2PeerConnectionFactory,
+) {
     private val failed = ConcurrentHashMap<String, Long>()
+    private val p2pUrls = ConcurrentHashMap<String, String>()
+    private val activeP2p = ConcurrentHashMap<String, Peer2PeerConnection>()
+    private val lastGood = ConcurrentHashMap<String, String>()
     private val probeClient = client.newBuilder().connectTimeout(2, TimeUnit.SECONDS)
         .callTimeout(3, TimeUnit.SECONDS).followRedirects(false).build()
 
@@ -28,7 +45,11 @@ class RemoteConnections(private val client: OkHttpClient) {
      * Temporarily excludes a failed handshake or session so reconnect can select a fallback.
      */
     fun connectionFailed(url: String) {
-        failed[url.trimEnd('/')] = System.nanoTime()
+        val key = url.trimEnd('/')
+        val stable = p2pUrls.remove(key) ?: key
+        failed[stable] = System.nanoTime()
+        activeP2p.remove(stable)?.close()
+        lastGood.values.removeAll(setOf(stable))
     }
 
     /**
@@ -61,28 +82,108 @@ class RemoteConnections(private val client: OkHttpClient) {
 
     private fun excluded(url: String): Boolean {
         val key = url.trimEnd('/')
+        return excludedKey(key)
+    }
+
+    private fun excludedKey(key: String): Boolean {
         val whenFailed = failed[key] ?: return false
         if (System.nanoTime() - whenFailed < TimeUnit.SECONDS.toNanos(30)) return true
         failed.remove(key, whenFailed)
         return false
     }
 
-    private fun reachable(url: String, deviceId: String): Boolean = runCatching {
-        probeClient.newCall(Request.Builder().url(url.trimEnd('/') + "/healthz").build())
-            .execute().use { response ->
-                if (!response.isSuccessful) return@use false
-                val data = JSONObject(response.body.string())
-                data.optString("status") == "ok" && data.optInt("protocolVersion") == 1 &&
-                    data.optString("device_id") == deviceId
-            }
-    }.getOrDefault(false)
+    private fun p2pKey(deviceId: String) = "p2p://$deviceId"
 
-    private fun direct(data: JSONObject, deviceId: String): String? {
-        val endpoints = data.optJSONArray("endpoints") ?: return null
-        for (index in 0 until endpoints.length()) {
-            val url = endpoints.optJSONObject(index)?.optString("url").orEmpty()
-            if (isDirect(url) && !excluded(url) && reachable(url, deviceId)) return url.trimEnd('/') + "/"
+    private suspend fun reachable(url: String, deviceId: String): Boolean = suspendCancellableCoroutine { pending ->
+        val call = probeClient.newCall(Request.Builder().url(url.trimEnd('/') + "/healthz").build())
+        pending.invokeOnCancellation { call.cancel() }
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, failure: IOException) {
+                pending.resume(false)
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                val valid = runCatching {
+                    response.use {
+                        if (!it.isSuccessful) return@use false
+                        val data = JSONObject(it.body.string())
+                        data.optString("status") == "ok" && data.optInt("protocolVersion") == 1 &&
+                            data.optString("device_id") == deviceId
+                    }
+                }.getOrDefault(false)
+                pending.resume(valid)
+            }
+        })
+    }
+
+    /**
+     * 并行探测全部直连候选，先通者胜：串行等超时会把建链拖到数倍 RTT。
+     *
+     * Probes all direct candidates concurrently and takes the first one that answers;
+     * sequential probing would stretch establishment to several times the round trip.
+     */
+    private suspend fun direct(data: JSONObject, deviceId: String): String? = coroutineScope {
+        val endpoints = data.optJSONArray("endpoints") ?: return@coroutineScope null
+        val candidates = (0 until endpoints.length()).mapNotNull { index ->
+            endpoints.optJSONObject(index)?.optString("url").orEmpty().takeIf { value ->
+                isDirect(value) && !excluded(value)
+            }
         }
+        val probes: List<Deferred<String?>> = candidates.map { candidate ->
+            async(Dispatchers.IO) { if (reachable(candidate, deviceId)) candidate else null }
+        }
+        val pending = probes.toMutableList()
+        while (pending.isNotEmpty()) {
+            val (probe, winner) = select<Pair<Deferred<String?>, String?>> {
+                pending.forEach { candidate -> candidate.onAwait { candidate to it } }
+            }
+            if (winner != null) {
+                probes.forEach { it.cancel() }
+                lastGood[deviceId] = winner.trimEnd('/')
+                return@coroutineScope winner.trimEnd('/') + "/"
+            }
+            pending.remove(probe)
+        }
+        null
+    }
+
+    private suspend fun peerToPeer(
+        entry: String,
+        deviceId: String,
+        data: JSONObject,
+    ): String? {
+        if (!data.optBoolean("p2p")) return null
+        val key = p2pKey(deviceId)
+        if (excludedKey(key)) return null
+        var connection: Peer2PeerConnection? = null
+        return try {
+            activeP2p.remove(key)?.close()
+            connection = peerConnectionFactory.connect(entry, deviceId, data.optString("stun"))
+            val opened = requireNotNull(connection)
+            val localUrl = opened.localUrl.trimEnd('/') + "/"
+            p2pUrls[localUrl.trimEnd('/')] = key
+            activeP2p[key] = opened
+            localUrl
+        } catch (cancellation: CancellationException) {
+            connection?.close()
+            throw cancellation
+        } catch (failure: Throwable) {
+            connection?.close()
+            failed[key] = System.nanoTime()
+            null
+        }
+    }
+
+    /**
+     * 先探测上次成功的入口：健康检查已校验 device_id，注册服务慢或离线也不拖累重连。
+     *
+     * Probes the previously successful entry first; its health check already verifies device_id,
+     * so a slow or unreachable registry never delays reconnection.
+     */
+    private suspend fun cached(deviceId: String): String? {
+        val cached = lastGood[deviceId] ?: return null
+        if (reachable(cached, deviceId)) return "$cached/"
+        lastGood.remove(deviceId, cached)
         return null
     }
 
@@ -110,6 +211,7 @@ class RemoteConnections(private val client: OkHttpClient) {
             location.trimEnd('/') + "/"
         }
         direct(data, deviceId)?.let { return it }
+        peerToPeer(entry, deviceId, data)?.let { return it }
         val tunnel = data.optString("tunnel_url")
         if (isTunnel(tunnel) && !excluded(tunnel)) return tunnel.trimEnd('/') + "/"
         client.newCall(Request.Builder().url("$api/fallback").post(ByteArray(0).toRequestBody()).build())
@@ -119,6 +221,7 @@ class RemoteConnections(private val client: OkHttpClient) {
             delay(2000)
             val updated = read() ?: throw IOException("注册服务协议已变化")
             direct(updated, deviceId)?.let { return it }
+            peerToPeer(entry, deviceId, updated)?.let { return it }
             val next = updated.optString("tunnel_url")
             if (isTunnel(next) && !excluded(next)) return next.trimEnd('/') + "/"
         }
