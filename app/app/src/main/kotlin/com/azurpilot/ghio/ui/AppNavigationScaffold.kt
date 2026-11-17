@@ -119,13 +119,24 @@ internal fun AppNavigationScaffold(
         ) {
             PagerInterceptionMode.Native
         }
+    // 虚拟屏页上禁止翻页：那页的手势是「注入到游戏」的操作指令，翻页器把它当导航吃掉后，
+    // 用户的滑动会直接把页面滑走，游戏一个事件都收不到。
+    //
+    // 用 settledPage 而不是 currentPage：动画进行中 currentPage 已经跳到目标页，会在手指
+    // 还没抬起时就把 pager 锁住，回弹到一半停住。
+    val swipeLocked = mainPagerState.pagerState.settledPage == TopDestination.Screen.ordinal
     val pagerContent =
         @Composable { bottomInnerPadding: Dp ->
             HorizontalPager(
                 modifier =
                     Modifier.fillMaxSize()
                         .clipToBounds()
-                        .pagerGestureOverride(mainPagerState.pagerState, mode = pagerMode)
+                        // 锁定时换成 Native（该分支是 `-> this`，不挂任何拦截器），
+                        // 否则 Cross-Axis 拦截器仍会把横向拖动转成翻页
+                        .pagerGestureOverride(
+                            mainPagerState.pagerState,
+                            mode = if (swipeLocked) PagerInterceptionMode.Native else pagerMode,
+                        )
                         .then(
                             if (
                                 enableFloatingBottomBar &&
@@ -143,9 +154,12 @@ internal fun AppNavigationScaffold(
                 // 业务分页包含实时日志与统计，避免屏外页面继续组合和绘制。
                 beyondViewportPageCount = 0,
                 overscrollEffect = null,
-                userScrollEnabled = pagerMode != PagerInterceptionMode.CrossAxisInterceptor,
+                userScrollEnabled = !swipeLocked &&
+                    pagerMode != PagerInterceptionMode.CrossAxisInterceptor,
                 pageNestedScrollConnection =
-                    if (pagerMode == PagerInterceptionMode.CrossAxisInterceptor)
+                    // 锁定时不能挂拦截器的 nested scroll：它会在子项里抢横向拖动，
+                    // 即便 userScrollEnabled=false 也能把页面拖走
+                    if (!swipeLocked && pagerMode == PagerInterceptionMode.CrossAxisInterceptor)
                         PagerGestureNestedScrollConnection
                     else
                         androidx.compose.foundation.pager.PagerDefaults.pageNestedScrollConnection(
