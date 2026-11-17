@@ -3,12 +3,56 @@ import javax.xml.parsers.DocumentBuilderFactory
 import javax.xml.transform.TransformerFactory
 import javax.xml.transform.dom.DOMSource
 import javax.xml.transform.stream.StreamResult
+import java.security.MessageDigest
+import java.net.URI
+import java.util.zip.ZipFile
 
 plugins {
     id("azurpilot.android.application")
     id("azurpilot.android.compose")
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
+}
+
+val easyTierDirectory = rootDir.parentFile.resolve(".tmp/easytier-runtime")
+val easyTierArtifacts = mapOf(
+    "arm64-v8a" to ("aarch64" to "f533ec25a7ea714e09f645615012200278058525795cc3bb690ff011aec1a70f"),
+    "x86_64" to ("x86_64" to "61b659eaedba658fa66fe47d17e1426cdd77e5d02fa15fed447bb4357c09dfd6"),
+)
+val prepareBundledEasyTier = tasks.register("prepareBundledEasyTier") {
+    inputs.property("version", "2.6.4")
+    inputs.property("artifacts", easyTierArtifacts.toString())
+    outputs.dir(easyTierDirectory.resolve("jni"))
+    doLast {
+        easyTierDirectory.mkdirs()
+        easyTierArtifacts.forEach { (abi, artifact) ->
+            val (architecture, expectedHash) = artifact
+            val filename = "easytier-linux-$architecture-v2.6.4.zip"
+            val archive = easyTierDirectory.resolve(filename)
+            if (!archive.isFile) {
+                val download = archive.resolveSibling("$filename.download")
+                URI("https://github.com/EasyTier/EasyTier/releases/download/v2.6.4/$filename")
+                    .toURL().openStream().use { input -> download.outputStream().use(input::copyTo) }
+                check(download.renameTo(archive)) { "Cannot save EasyTier download" }
+            }
+            val actualHash = MessageDigest.getInstance("SHA-256").digest(archive.readBytes())
+                .joinToString("") { "%02x".format(it) }
+            check(actualHash == expectedHash) { "EasyTier checksum mismatch for $abi" }
+            val directory = easyTierDirectory.resolve("jni/$abi").apply { mkdirs() }
+            ZipFile(archive).use { zip ->
+                for (program in listOf("easytier-core", "easytier-cli")) {
+                    val entry = requireNotNull(zip.getEntry("easytier-linux-$architecture/$program"))
+                    zip.getInputStream(entry).use { input ->
+                        directory.resolve("lib$program.so").outputStream().use(input::copyTo)
+                    }
+                }
+            }
+        }
+    }
+}
+if (providers.gradleProperty("azurpilot.bundleEasyTier").orNull == "true") {
+    android.sourceSets.getByName("main").jniLibs.srcDir(easyTierDirectory.resolve("jni"))
+    tasks.matching { it.name == "preBuild" }.configureEach { dependsOn(prepareBundledEasyTier) }
 }
 
 android {
@@ -343,6 +387,11 @@ dependencies {
 
     // AzurPilot /api/v1/ws 网关：WebSocket 富接口（实例/总览/自启/热更新）
     implementation(libs.okhttp)
+    // 远程直连失败时的 P2P 隧道；ABI 仍由 AndroidApplicationConventionPlugin 收窄
+    implementation(libs.stream.webrtc.android)
+    // 127.0.0.1 本地网关入口：把 HTTP/WS 封进 P2P DataChannel
+    implementation(libs.nanohttpd)
+    implementation(libs.nanohttpd.websocket)
     // 容器 DNS 的 DoH 主路由（#31）：热更新源/NTP 域名预解析进 /etc/hosts
     implementation(libs.okhttp.dnsoverhttps)
     implementation("androidx.camera:camera-camera2:1.5.3")

@@ -109,6 +109,7 @@ private fun AzurPilotRuntimeSurface(
     content: @Composable (AzurPilotRepository) -> Unit,
 ) {
     val connected by repository.connected.collectAsStateWithLifecycle()
+    val connecting by repository.connecting.collectAsStateWithLifecycle()
     val remoteName by repository.remoteName.collectAsStateWithLifecycle()
     val settings: AppSettingsManager = koinInject()
     val remoteClientMode by settings.remoteClientMode.collectAsStateWithLifecycle()
