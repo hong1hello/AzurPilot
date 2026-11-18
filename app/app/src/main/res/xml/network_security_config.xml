@@ -1,9 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- AP 公网直连使用动态 IPv4/IPv6，无法预先枚举域名；注册与配对仍使用 HTTPS。 -->
+<!--
+  AP 公网直连走动态 IPv4/IPv6，无法预先枚举域名，因此统一在 base-config 放开明文。
+
+  为什么只留 base-config、不再写 domain-config：
+  Android 15 的 NetworkSecurityConfigProvider.handleNewApplication 在展开配置时，
+  会把 base-config 落成 per-domain 规则；此时再显式声明 127.0.0.1 / localhost，
+  同一域名就有了两条来源不同的规则，直接抛
+  `RuntimeException: Found multiple conflicting per-domain rules`。
+
+  后果不是 UI 报错，而是特权进程创建 Application 时崩：
+  - Shizuku 后端：进程由系统 fork，Application 初始化失败 → 进程退出 →
+    绑定等满 20 秒 → 界面提示「设备控制未连接」
+  - Root 后端：RootUserService.makeApplication 捕获异常后回落 packageContext，才活着
+
+  所以这里刻意只有 base-config 一段：覆盖全部主机的明文需求，且不产生重复规则。
+-->
 <network-security-config>
     <base-config cleartextTrafficPermitted="true" />
-    <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="false">127.0.0.1</domain>
-        <domain includeSubdomains="false">localhost</domain>
-    </domain-config>
 </network-security-config>
