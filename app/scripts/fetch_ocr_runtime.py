@@ -13,6 +13,8 @@ import hashlib
 import json
 import shutil
 import tarfile
+import time
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -42,6 +44,17 @@ def digest(path):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+# 上游 CDN 会偶发回 404（Maven Central 走 Cloudflare，缓存刷新窗口里会短暂取不到
+# release 资产）。这类 404 与「包真的没了」不可区分，所以不能一次判死：按退避重试，
+# 每次都做完整校验，最终仍失败才抛出。成功路径不产生任何额外网络请求。
+# Upstream CDNs occasionally answer 404 for a release asset that clearly exists
+# (Maven Central sits behind Cloudflare and does this during cache rotation). A 404
+# is indistinguishable from "asset gone", so retry with backoff instead of failing
+# once; every attempt is checksum-verified. The success path adds no extra requests.
+ATTEMPTS = 5
+BACKOFF_SECONDS = (0, 10, 30, 60)
+
+
 def download(name, url, expected):
     """下载完整文件并校验，失败不留下可用缓存。 / Downloads and verifies complete files."""
     cache = OUTPUT / "downloads"
@@ -50,14 +63,33 @@ def download(name, url, expected):
     if target.is_file() and digest(target) == expected:
         return target
     temporary = target.with_suffix(".partial")
-    print(f"Downloading {name}", flush=True)
-    with urllib.request.urlopen(url, timeout=120) as response, temporary.open("wb") as out:
-        shutil.copyfileobj(response, out)
-    if digest(temporary) != expected:
-        temporary.unlink()
-        raise ValueError(f"Checksum mismatch: {name}")
-    temporary.replace(target)
-    return target
+    last_error = None
+    for attempt in range(1, ATTEMPTS + 1):
+        delay = BACKOFF_SECONDS[min(attempt - 1, len(BACKOFF_SECONDS) - 1)]
+        if delay:
+            print(f"Retrying {name} in {delay}s (attempt {attempt}/{ATTEMPTS})", flush=True)
+            time.sleep(delay)
+        print(f"Downloading {name} (attempt {attempt}/{ATTEMPTS})", flush=True)
+        try:
+            with urllib.request.urlopen(url, timeout=120) as response, temporary.open("wb") as out:
+                shutil.copyfileobj(response, out)
+        except (urllib.error.URLError, OSError) as error:
+            # URLError 覆盖 HTTPError（404/5xx）、连接重置和超时；残缺文件下一轮会被覆盖。
+            last_error = error
+            if temporary.exists():
+                temporary.unlink()
+            print(f"Download of {name} failed: {error}", flush=True)
+            continue
+        if digest(temporary) != expected:
+            # 校验不符多为截断或镜像陈旧，重试有意义；清掉残片再试。
+            actual = digest(temporary)
+            temporary.unlink()
+            last_error = ValueError(f"Checksum mismatch: {name} (got {actual}, want {expected})")
+            print(str(last_error), flush=True)
+            continue
+        temporary.replace(target)
+        return target
+    raise RuntimeError(f"Could not fetch {name} after {ATTEMPTS} attempts: {last_error}")
 
 
 def main():

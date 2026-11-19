@@ -407,6 +407,12 @@ jobs:
           python3 app/scripts/build_device_catalog.py
 
       - uses: astral-sh/setup-uv@v6
+      # 先跑下载重试的离线用例：上游 CDN 偶发 404 曾让整轮发布在第 13 步失败，
+      # 这个用例不联网，只验证退避重试与校验逻辑本身。
+      # Run the offline retry tests first: a transient upstream 404 took the whole
+      # release down at step 13 once. These cases never touch the network.
+      - name: Verify OCR download retry logic
+        run: python3 app/scripts/test_fetch_ocr_runtime_retry.py
       - name: Prepare pinned OCR NPU runtime
         run: |
           python3 app/scripts/fetch_ocr_runtime.py
