@@ -17,6 +17,7 @@ import com.azurpilot.ghio.keepalive.KeepAliveManager
 import com.azurpilot.ghio.log.AppLogWriter
 import com.azurpilot.ghio.log.CrashHandler
 import com.azurpilot.ghio.log.LogCleaner
+import com.azurpilot.ghio.storage.StorageJanitor
 import com.azurpilot.ghio.log.LogTreeHolder
 import com.azurpilot.ghio.overlay.OverlayController
 import com.azurpilot.ghio.overlay.screensaver.ScreenSaverOverlayManager
@@ -106,6 +107,12 @@ class AzurPilotApp : Application() {
                 runCatching {
                     if (settings.autoCleanLogs.value) koin.get<LogCleaner>().cleanOutdated()
                 }.onFailure { Timber.w(it, "LogCleaner 执行失败") }
+                // 运行时内部的日志与截图没人管，越跑越大；和宿主日志共用同一个开关。
+                // Runtime-side logs and screenshots have no other owner and only ever grow;
+                // they share the same toggle as the host logs.
+                runCatching {
+                    if (settings.autoCleanLogs.value) koin.get<StorageJanitor>().clean()
+                }.onFailure { Timber.w(it, "StorageJanitor 执行失败") }
             }
             withContext(Dispatchers.Main) { postCreate(koin) }
         }

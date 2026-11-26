@@ -28,7 +28,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WORK_DIR="${WORK_DIR:-$REPO_ROOT/.tmp/azurpilot-build}"
 ROOTFS_DIR="$WORK_DIR/rootfs"
 DIST_DIR="${DIST_DIR:-$REPO_ROOT/dist}"
-SOURCE_REPO="${AZURPILOT_REPO:-https://github.com/hong1hello/zurPilot.git}"
+SOURCE_REPO="${AZURPILOT_REPO:-https://github.com/Beatrice-betty/AzurPilot.git}"
 SOURCE_BRANCH="${AZURPILOT_BRANCH:-master}"
 # 设备端热更只认这个地址，不再把官方源换成 CNB；缺省与构建来源一致。
 # The device hot-update reads only this address; the official-to-CNB rewrite is gone,
@@ -171,6 +171,33 @@ spec.loader.exec_module(mod)
 PY
 rm -rf "$FRONTEND/node_modules"
 
+# ── 运行期用不到的静态资源 ────────────────────────────────────────────────
+# 文档、手册、info 与多余 locale 从不参与 import；Python 自带的
+# test/idlelib/turtledemo/ensurepip 只服务交互式开发；三方包的一级 tests 目录
+# 也只是打包产物。这些都不在 git 工作区里，热更 reset 不会把它们拉回来，删掉是永久的。
+# Static assets that never participate in import: docs, man/info pages, extra
+# locales, CPython's own test/idlelib/turtledemo/ensurepip, and first-level tests
+# directories of site-packages. None live in the git work tree, so a hot update
+# reset cannot bring them back.
+rm -rf "$ROOTFS_DIR/usr/share/doc" "$ROOTFS_DIR/usr/share/man" "$ROOTFS_DIR/usr/share/info"
+if [[ -d $ROOTFS_DIR/usr/share/locale ]]; then
+    find "$ROOTFS_DIR/usr/share/locale" -mindepth 1 -maxdepth 1 -type d \
+        ! -name 'zh*' ! -name 'en*' ! -name 'ja*' ! -name 'C*' ! -name 'POSIX' \
+        -exec rm -rf {} + 2>/dev/null || true
+fi
+for _py in "$ROOTFS_DIR"/usr/lib/python3.*; do
+    [[ -d $_py ]] || continue
+    # tkinter 保留：matplotlib 的 TkAgg 后端会硬依赖它，删了会在出图路径上炸。
+    rm -rf "$_py/test" "$_py/idlelib" "$_py/turtledemo" "$_py/ensurepip"
+done
+if [[ -n ${VENV_SITE_PACKAGES:-} && -d $VENV_SITE_PACKAGES ]]; then
+    find "$VENV_SITE_PACKAGES" -mindepth 2 -maxdepth 2 -type d -name tests \
+        -exec rm -rf {} + 2>/dev/null || true
+fi
+# 浅克隆只保留 HEAD 一棵树；gc 把松散对象压实，热更的 fetch 仍然可用。
+git -C "$ROOTFS_DIR/opt/azurpilot" gc --prune=now --quiet 2>/dev/null || true
+
+
 # 第三方 wheel 的调试信息不参与推理；保持符号及加载段页对齐，并在裁剪后真实导入和计算。
 python3 "$REPO_ROOT/rootfs/build/compact-runtime.py" "$ROOTFS_DIR" \
     --report "$ROOTFS_DIR/opt/azurpilot/RUNTIME_SIZE_REPORT.json"
@@ -264,5 +291,32 @@ rm -rf "$ROOTFS_DIR/opt/uv-cache" "$ROOTFS_DIR/opt/npm-cache" "$ROOTFS_DIR/root/
 # 浅克隆保留旧提交对象，热更失败或进程被杀时才能离线回滚。
 find "$ROOTFS_DIR" -type d -name __pycache__ -prune -exec rm -rf {} +
 # -T0 多线程压缩缩短 CI 时长；--one-file-system 防止把残留挂载误打进镜像。
+# ── 体积审计 ──────────────────────────────────────────────────────────────
+# 打印到构建日志：以后每次构建都能对比体积构成，定位是哪一层在涨。
+# Printed to the build log so every run records where the bytes went.
+echo "=== ROOTFS_SIZE_AUDIT_BEGIN ==="
+du -sx --block-size=1M "$ROOTFS_DIR" 2>/dev/null | awk '{printf "TOTAL            %6d MB\n", $1}'
+for _d in usr opt var etc root; do
+    [[ -d $ROOTFS_DIR/$_d ]] || continue
+    du -sx --block-size=1M "$ROOTFS_DIR/$_d" 2>/dev/null \
+        | awk -v n="$_d" '{printf "  %-12s %6d MB\n", n, $1}'
+done
+echo "--- opt/* ---"
+du -sx --block-size=1M "$ROOTFS_DIR"/opt/* 2>/dev/null | sort -rn | head -12 \
+    | awk '{n=split($2,a,"/"); printf "  %-30s %6d MB\n", a[n], $1}'
+echo "--- venv site-packages top15 ---"
+du -sx --block-size=1M "$ROOTFS_DIR/opt/azurpilot-venv/lib/python3.14/site-packages"/* 2>/dev/null \
+    | sort -rn | head -15 | awk '{n=split($2,a,"/"); printf "  %-34s %6d MB\n", a[n], $1}'
+echo "--- usr/* ---"
+du -sx --block-size=1M "$ROOTFS_DIR"/usr/* 2>/dev/null | sort -rn | head -10 \
+    | awk '{n=split($2,a,"/"); printf "  %-24s %6d MB\n", a[n], $1}'
+echo "--- .git ---"
+du -sx --block-size=1M "$ROOTFS_DIR/opt/azurpilot/.git" 2>/dev/null \
+    | awk '{printf "  %-24s %6d MB\n", ".git", $1}'
+echo "--- files >20MB top15 ---"
+find "$ROOTFS_DIR" -xdev -type f -size +20M -printf '%s\t%p\n' 2>/dev/null | sort -rn | head -15 \
+    | awk -F'\t' '{printf "  %7.1f MB %s\n", $1/1048576, $2}'
+echo "=== ROOTFS_SIZE_AUDIT_END ==="
+
 XZ_OPT=-T0 tar --one-file-system -C "$ROOTFS_DIR" -cJf "$DIST_DIR/rootfs.tar.xz" .
 sha256sum "$DIST_DIR/rootfs.tar.xz"
